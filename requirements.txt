@@ -1,0 +1,25 @@
+# —— 后端依赖（Python 3.12+）——
+pydantic-ai==2.27.0
+fastapi>=0.110
+uvicorn>=0.30
+openai>=1.60
+python-multipart>=0.0.9
+
+# 记忆/向量
+sentence-transformers>=3.0
+chromadb>=0.5
+
+# 知识库（LlamaIndex）
+llama-index-core>=0.12
+llama-index-llms-openai-like>=0.3
+llama-index-embeddings-huggingface>=0.4
+llama-index-vector-stores-chroma>=0.4
+llama-index-readers-file>=0.4
+
+# 工具
+pillow>=10.0          # OCR 图片
+beautifulsoup4>=4.12  # 网页检索
+trafilatura>=1.8      # 网页正文抽取
+
+# 督促/调度
+apscheduler>=3.10
