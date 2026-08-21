@@ -266,10 +266,10 @@ async function openTrace(runId){
     const d = await r.json();
     const evs = d.events||[];
     if(!evs.length){ el.innerHTML='<div class="empty">无事件</div>'; return; }
-    const typeIcon = t => t==='run_start'?'🚀':t==='llm_start'?'🧠':t==='llm_end'?'🧠✓':t==='tool_start'?'🔧':t==='tool_end'?(ev.status==='done'?'✅':'❌'):t==='error'?'⚠️':t==='run_end'?'🏁':t==='token_usage'?'💰':t==='hook'?'🔗':'·';
+    const typeIcon = (t, status) => t==='run_start'?'🚀':t==='llm_start'?'🧠':t==='llm_end'?'🧠✓':t==='tool_start'?'🔧':t==='tool_end'?(status==='done'?'✅':'❌'):t==='error'?'⚠️':t==='run_end'?'🏁':t==='token_usage'?'💰':t==='hook'?'🔗':'·';
     el.innerHTML = `<div style="font-size:12px;color:var(--muted);margin-bottom:8px">run ${runId} · ${evs.length} 个事件：</div>` +
       evs.map(ev=>`<div class="trace-line">
-        <span style="width:26px;display:inline-block">${typeIcon(ev.type)}</span>
+        <span style="width:26px;display:inline-block">${typeIcon(ev.type, ev.status)}</span>
         <span style="width:90px;color:var(--muted);font-size:11px;display:inline-block">${(ev.ts||'').slice(11,19)}</span>
         <span style="width:110px;display:inline-block;color:${ev.status==='error'||ev.status==='failed'?'var(--red)':'var(--teal)'};font-weight:600">${ev.type}${ev.name?' · '+ev.name:''}</span>
         <span style="color:#8B98A9;font-size:11px">${(ev.detail||'').slice(0,80)}</span>
