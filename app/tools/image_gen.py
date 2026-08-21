@@ -29,6 +29,9 @@ def generate_image(prompt: str, size: str = "1024x1024") -> str:
     if size not in SUPPORTED_SIZES:
         size = "1024x1024"
     body = {"model": ZHIPU_MODEL, "prompt": p, "size": size}
+    # 降级提示（2026-08-21）：生图失败 → 可改用 mermaid 代码块（前端自动渲染成图，免费即时）——
+    # 结构性图解（流程图/架构/对比）mermaid 甚至更精准；AI 生图适合视觉丰富的插画
+    _mermaid_hint = "可改用 mermaid 代码块画结构图/流程图（前端自动渲染），或稍后重试"
     try:
         req = urllib.request.Request(
             ZHIPU_URL,
@@ -39,7 +42,7 @@ def generate_image(prompt: str, size: str = "1024x1024") -> str:
             d = json.loads(r.read())
         url = d.get("data", [{}])[0].get("url", "")
         if not url:
-            return tool_err("生图", "返回为空", "稍后重试")
+            return tool_err("生图", "返回为空", _mermaid_hint)
         return f"图片已生成：\n![{p[:30]}]({url})"
     except Exception as e:
-        return tool_err("生图", f"生成失败: {str(e)[:80]}", "稍后重试")
+        return tool_err("生图", f"生成失败: {str(e)[:80]}", _mermaid_hint)
