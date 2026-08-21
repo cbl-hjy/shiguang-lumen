@@ -60,6 +60,12 @@ def llm_end(run_id: str, tag: str, ok: bool = True) -> None:
     _write({"type": "llm_end", "run_id": run_id, "tag": tag, "status": "ok" if ok else "error"})
 
 
+def llm_output(run_id: str, tag: str, text: str) -> None:
+    """LLM 回复全文进 trace（2026-08-21 补：会话重放可见模型回复——Langfuse generation output）。
+    截断 1000 字防 trace 膨胀；本地存储（data/ git 忽略，隐私安全）。"""
+    _write({"type": "llm_output", "run_id": run_id, "tag": tag, "text": (text or "")[:1000]})
+
+
 def tool_start(run_id: str, name: str, args: str, call_id: str | None = None) -> None:
     _write({"type": "tool_start", "run_id": run_id, "name": name, "args": (args or "")[:80], "id": call_id})
 

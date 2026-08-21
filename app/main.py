@@ -725,6 +725,8 @@ async def chat(req: ChatRequest, request: Request) -> StreamingResponse:
                     messages = msgs
                     state["messages"] = msgs  # B1 引用同步（_finalize 读 state——548 行重新赋值会断引用）
                     obs.llm_end(run_id, tag, True)  # LLM 调用成功（2026-08-21 补：配对算耗时）
+                    if full_text:
+                        obs.llm_output(run_id, tag, full_text)  # 回复全文进 trace（重放可见，2026-08-21 补）
                     circuit_record(True)
                     break
                 # 空 content（166 轮 0 字场景的正主）：无文本且无工具调用 → 确定性判定（有没有字/有没有调工具）
