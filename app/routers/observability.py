@@ -212,3 +212,127 @@ def observability_summary():
         },
         "generated_at": __import__("datetime").datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     }
+
+
+# ---------- 会话重放（参考 Langfuse trace/session 设计，2026-08-21）----------
+
+def _db_conn():
+    import sqlite3
+
+    return sqlite3.connect(DATA_DIR / "data" / "sessions.db")
+
+
+@router.get("/sessions")
+def obs_sessions(limit: int = 30):
+    """会话列表（sessions.db）+ 各会话的 trace 数——trace-driven debugging 的入口"""
+    try:
+        conn = _db_conn()
+        rows = conn.execute(
+            "SELECT id, created_at, title, summary FROM sessions ORDER BY created_at DESC LIMIT ?",
+            (max(1, min(limit, 100)),),
+        ).fetchall()
+        conn.close()
+    except Exception as e:
+        return {"sessions": [], "error": str(e)}
+    # trace 按 run_id 统计（run_start 的 sid 关联会话）
+    run_map = {}
+    for ev in _read_trace()[0]:
+        if ev.get("type") == "run_start":
+            run_map.setdefault(ev.get("sid", ""), 0)
+        if ev.get("run_id"):
+            pass
+    sessions = []
+    for sid, created, title, summary in rows:
+        sessions.append({
+            "id": sid, "created_at": created or "", "title": title or "",
+            "summary": (summary or "")[:120],
+        })
+    return {"sessions": sessions}
+
+
+@router.get("/session/{sid}/runs")
+def obs_session_runs(sid: str):
+    """会话的 run 列表（trace run_start 按 sid 匹配）——重放下钻：会话→run→事件流"""
+    runs = []
+    seen = set()
+    for ev in _read_trace()[0]:
+        if ev.get("type") == "run_start" and ev.get("sid", "").startswith(sid[:8]):
+            rid = ev.get("run_id")
+            if rid and rid not in seen:
+                seen.add(rid)
+                runs.append({"run_id": rid, "ts": ev.get("ts", ""), "text": str(ev.get("text", ""))[:60]})
+    return {"sid": sid, "runs": runs[-20:]}
+
+
+@router.get("/trace/{run_id}")
+def obs_trace(run_id: str):
+    """单个 run 的完整事件流（重放：按时间线展示，含耗时/状态/参数）"""
+    evs = [e for e in _read_trace()[0] if e.get("run_id") == run_id]
+    if not evs:
+        return {"run_id": run_id, "events": [], "error": "run_id 不存在"}
+    # 时间线排序（ts 字符串排序即可，ISO 格式可比较）
+    evs.sort(key=lambda e: e.get("ts", ""))
+    out = []
+    for e in evs:
+        out.append({
+            "type": e.get("type"),
+            "ts": e.get("ts", ""),
+            "name": e.get("name") or e.get("tag") or e.get("where") or "",
+            "status": e.get("status", ""),
+            "detail": (str(e.get("args") or e.get("result") or e.get("msg") or e.get("text") or ""))[:120],
+            "dur_ms": e.get("dur_ms"),
+        })
+    return {"run_id": run_id, "events": out}
+
+
+# ---------- 记忆健康 + 注入审计（2026-08-21）----------
+
+@router.get("/memory")
+def obs_memory():
+    """记忆健康：条目数/类别分布/画像大小/最近更新（数据给觉察）"""
+    mem = DATA_DIR / "memory" / "user_memory.md"
+    prof = DATA_DIR / "memory" / "profile.md"
+    state = DATA_DIR / "memory" / "state.json"
+    result = {"entries": 0, "categories": {}, "profile_chars": 0, "last_updated": ""}
+    try:
+        if mem.exists():
+            lines = [l for l in mem.read_text(encoding="utf-8", errors="replace").splitlines() if l.startswith("- ")]
+            result["entries"] = len(lines)
+            cats = {}
+            for l in lines:
+                m = __import__("re").search(r"cat=([^|]+)", l)
+                if m:
+                    cats[m.group(1).strip()] = cats.get(m.group(1).strip(), 0) + 1
+            result["categories"] = dict(sorted(cats.items(), key=lambda x: -x[1]))
+            import os
+
+            result["last_updated"] = __import__("time").strftime(
+                "%Y-%m-%d %H:%M", __import__("time").localtime(os.path.getmtime(mem)))
+    except Exception as e:
+        result["error"] = str(e)
+    try:
+        result["profile_chars"] = len(prof.read_text(encoding="utf-8", errors="replace")) if prof.exists() else 0
+    except Exception:
+        pass
+    return result
+
+
+@router.get("/injection")
+def obs_injection(limit: int = 50):
+    """注入审计趋势（injection_log.jsonl 的 blocks.total——上下文预算观察）"""
+    p = DATA_DIR / "data" / "injection_log.jsonl"
+    rows = []
+    if p.exists():
+        for line in p.read_text(encoding="utf-8", errors="replace").splitlines():
+            line = line.strip()
+            if not line.startswith("{"):
+                continue
+            try:
+                d = json.loads(line)
+                blocks = d.get("blocks", {})
+                rows.append({"time": d.get("time", ""), "total": blocks.get("total", 0),
+                             "state": blocks.get("state", 0), "write_rules": blocks.get("write_rules", 0)})
+            except json.JSONDecodeError:
+                continue
+    rows = rows[-max(1, min(limit, 200)):]
+    return {"records": rows, "count": len(rows)}

@@ -71,6 +71,11 @@
   .err-fill{height:100%;background:linear-gradient(90deg,#8A3B49,var(--red));border-radius:6px}
 
   .empty{color:var(--muted);text-align:center;padding:30px 0;font-size:13px}
+  /* 会话重放（2026-08-21） */
+  .sess-item{background:var(--bg2);border:1px solid var(--line);border-radius:8px;padding:8px 12px;margin-bottom:6px;cursor:pointer;font-size:13px}
+  .sess-item:hover{border-color:var(--teal);background:#182230}
+  .trace-line{padding:4px 10px;font-size:12px;border-bottom:1px solid #1A2230;display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+  .trace-line:hover{background:rgba(62,201,176,.05)}
   footer{color:var(--muted);font-size:11px;text-align:center;margin-top:26px;letter-spacing:1px}
 </style>
 </head>
@@ -108,6 +113,21 @@
   <div class="panel">
     <h2><span class="dot">◆</span>错误分布</h2>
     <div id="errChart"></div>
+  </div>
+
+  <div class="panel">
+    <h2><span class="dot">◆</span>记忆健康（条目 · 类别 · 画像）</h2>
+    <div id="memoryPanel"></div>
+  </div>
+
+  <div class="panel">
+    <h2><span class="dot">◆</span>注入审计趋势（每轮上下文预算 · total 字符）</h2>
+    <div id="injectionChart"></div>
+  </div>
+
+  <div class="panel">
+    <h2><span class="dot">◆</span>会话重放（trace-driven debugging · 点会话 → 点 run 看事件流）</h2>
+    <div id="sessionPanel"></div>
   </div>
 
   <footer>拾光 Lumen · 星图观测台 —— 数据给觉察，不给判断</footer>
@@ -150,9 +170,112 @@ async function load(){
     drawTools(t.tool_stats||[]);
     drawToken(tok.by_day||[]);
     drawErrors(t.errors||{}, d.council_errors||0);
+    loadMemory();
+    loadInjection();
+    loadSessions();
   }catch(e){
     document.getElementById('genAt').textContent = '加载失败: ' + e.message;
   }
+}
+
+// —— 记忆健康（2026-08-21）——
+async function loadMemory(){
+  const el = document.getElementById('memoryPanel');
+  try{
+    const r = await fetch('/api/observability/memory');
+    const d = await r.json();
+    const cats = Object.entries(d.categories||{}).sort((a,b)=>b[1]-a[1]);
+    const maxC = Math.max(...cats.map(x=>x[1]),1);
+    const catHtml = cats.length ? cats.map(([k,v])=>{
+      const w = v/maxC*100;
+      return `<div class="bar-row"><div class="bar-name">${k}</div><div class="bar-track"><div class="bar-fill" style="width:${w}%"><span class="bar-num">${v}</span></div></div></div>`;
+    }).join('') : '<div class="empty">暂无记忆</div>';
+    el.innerHTML = `
+      <div class="cards" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr))">
+        <div class="card"><div class="k">记忆条目</div><div class="v">${d.entries||0}</div></div>
+        <div class="card"><div class="k">画像大小</div><div class="v">${fmt(d.profile_chars||0)} <small>字符</small></div></div>
+        <div class="card gold"><div class="k">最近更新</div><div class="v" style="font-size:15px">${d.last_updated||'—'}</div></div>
+      </div>
+      <div style="margin-top:14px">${catHtml}</div>`;
+  }catch(e){ el.innerHTML = '<div class="empty">加载失败: '+e.message+'</div>'; }
+}
+
+// —— 注入审计趋势（2026-08-21）——
+async function loadInjection(){
+  const el = document.getElementById('injectionChart');
+  try{
+    const r = await fetch('/api/observability/injection');
+    const d = await r.json();
+    const rows = d.records||[];
+    if(!rows.length){ el.innerHTML='<div class="empty">暂无注入记录</div>'; return; }
+    const W=940,H=160,P_L=52,P_R=14,P_T=22,P_B=24;
+    const iw=W-P_L-P_R, ih=H-P_T-P_B;
+    const maxV = Math.max(...rows.map(x=>x.total),1);
+    const X = i => P_L + iw*(i/Math.max(rows.length-1,1));
+    const Y = v => P_T + ih - (v/maxV)*ih;
+    const pts = rows.map((x,i)=>`${X(i)},${Y(x.total)}`).join(' ');
+    const area = `${P_L},${H-P_B} ${pts} ${W-P_R},${H-P_B}`;
+    const every = Math.max(1, Math.ceil(rows.length/8));
+    const xl = rows.map((x,i)=> i%every===0||i===rows.length-1
+      ? `<text x="${X(i)}" y="${H-8}" text-anchor="middle" font-size="10" fill="#6B7789">${(x.time||'').slice(5,16)}</text>` : '').join('');
+    el.innerHTML = `<svg class="chart" viewBox="0 0 ${W} ${H}">
+      <polygon points="${area}" fill="rgba(62,201,176,.08)"/>
+      <polyline points="${pts}" fill="none" stroke="var(--teal)" stroke-width="2"/>
+      ${rows.map((x,i)=>`<circle cx="${X(i)}" cy="${Y(x.total)}" r="2.5" fill="var(--gold)"/>`).join('')}${xl}
+    </svg>
+    <div class="legend"><span>当前注入 ${fmt(rows[rows.length-1].total)} 字符 · 共 ${rows.length} 条记录（state/write_rules 等块可展开）</span></div>`;
+  }catch(e){ el.innerHTML = '<div class="empty">加载失败: '+e.message+'</div>'; }
+}
+
+// —— 会话重放（2026-08-21，参考 Langfuse trace 设计）——
+async function loadSessions(){
+  const el = document.getElementById('sessionPanel');
+  try{
+    const r = await fetch('/api/observability/sessions?limit=12');
+    const d = await r.json();
+    const ss = d.sessions||[];
+    if(!ss.length){ el.innerHTML='<div class="empty">暂无会话</div>'; return; }
+    el.innerHTML = `<div class="sess-list">` + ss.map(s=>`
+      <div class="sess-item" onclick="openSession('${s.id}')">
+        <div><span style="color:var(--gold)">●</span> ${s.title||'(未命名)'}</div>
+        <div style="color:var(--muted);font-size:11px">${s.created_at||''} · ${(s.summary||'').slice(0,60)}</div>
+      </div>`).join('') + `</div><div id="runList" style="margin-top:10px"></div>`;
+  }catch(e){ el.innerHTML = '<div class="empty">加载失败: '+e.message+'</div>'; }
+}
+
+async function openSession(sid){
+  const el = document.getElementById('runList');
+  el.innerHTML = '<div class="empty">加载该会话的对话轮次…</div>';
+  try{
+    const r = await fetch(`/api/observability/session/${sid}/runs`);
+    const d = await r.json();
+    const runs = d.runs||[];
+    if(!runs.length){ el.innerHTML='<div class="empty">该会话无 trace 记录（trace 补录前或未经过对话）</div>'; return; }
+    el.innerHTML = `<div style="font-size:12px;color:var(--muted);margin-bottom:8px">会话 ${sid} · ${runs.length} 个对话轮次：</div>` +
+      runs.map(run=>`<div class="sess-item" onclick="openTrace('${run.run_id}')" style="border-left:3px solid var(--teal)">
+        <div><span style="color:var(--teal)">▸</span> ${run.ts||''} · ${(run.text||'').slice(0,50)}</div>
+      </div>`).join('') + `<div id="traceView" style="margin-top:10px"></div>`;
+  }catch(e){ el.innerHTML = '<div class="empty">'+e.message+'</div>'; }
+}
+
+async function openTrace(runId){
+  const el = document.getElementById('traceView');
+  el.innerHTML = '<div class="empty">加载事件流…</div>';
+  try{
+    const r = await fetch(`/api/observability/trace/${runId}`);
+    const d = await r.json();
+    const evs = d.events||[];
+    if(!evs.length){ el.innerHTML='<div class="empty">无事件</div>'; return; }
+    const typeIcon = t => t==='run_start'?'🚀':t==='llm_start'?'🧠':t==='llm_end'?'🧠✓':t==='tool_start'?'🔧':t==='tool_end'?(ev.status==='done'?'✅':'❌'):t==='error'?'⚠️':t==='run_end'?'🏁':t==='token_usage'?'💰':t==='hook'?'🔗':'·';
+    el.innerHTML = `<div style="font-size:12px;color:var(--muted);margin-bottom:8px">run ${runId} · ${evs.length} 个事件：</div>` +
+      evs.map(ev=>`<div class="trace-line">
+        <span style="width:26px;display:inline-block">${typeIcon(ev.type)}</span>
+        <span style="width:90px;color:var(--muted);font-size:11px;display:inline-block">${(ev.ts||'').slice(11,19)}</span>
+        <span style="width:110px;display:inline-block;color:${ev.status==='error'||ev.status==='failed'?'var(--red)':'var(--teal)'};font-weight:600">${ev.type}${ev.name?' · '+ev.name:''}</span>
+        <span style="color:#8B98A9;font-size:11px">${(ev.detail||'').slice(0,80)}</span>
+        ${ev.dur_ms?`<span style="color:var(--gold);font-size:11px;margin-left:6px">${(ev.dur_ms/1000).toFixed(1)}s</span>`:''}
+      </div>`).join('');
+  }catch(e){ el.innerHTML = '<div class="empty">'+e.message+'</div>'; }
 }
 
 function drawLlm(list){
