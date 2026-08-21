@@ -40,6 +40,7 @@ from app.tools.documents import read_document
 from app.tools.kb import kb_ingest, kb_search
 from app.tools.ocr import ocr_image
 from app.tools.vision import analyze_image
+from app.tools.image_gen import generate_image
 from app.tools.sandbox import python_sandbox
 from app.tools.web_search import web_search
 from app.tools.bocha_search import bocha_search
@@ -325,6 +326,7 @@ def build_tutor_agent() -> Agent:
         python_sandbox,
         ocr_image,
         analyze_image,
+        generate_image,
         read_document,
         kb_search,
         kb_ingest,
