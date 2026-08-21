@@ -105,6 +105,10 @@ from app.council.api import router as council_router
 app.include_router(council_router)
 app.include_router(panels_router)
 app.include_router(kb_router)
+# 星图观测台（2026-08-21）：可观测性统一入口——/obs 页面 + /api/observability/* 聚合
+from app.routers.observability import router as obs_router
+
+app.include_router(obs_router)
 
 # 前端产物单一目录（#B 拆双目录 2026-08-13）：后端直接读 frontend/dist——构建产物只此一份，
 # 消除"app/static 与 dist 两版漂移"根因（旧版 static/index.html 是 8/11 残留，已 git rm）。
@@ -124,7 +128,8 @@ async def auth_middleware(request: Request, call_next):
     静态资源（index/assets）放行；未配置 token = 鉴权关闭（本地 127.0.0.1 免鉴权是特性）。"""
     from app.config import SHIGUANG_TOKEN
 
-    if SHIGUANG_TOKEN and request.url.path.startswith("/api/"):
+    if SHIGUANG_TOKEN and request.url.path.startswith("/api/") and not request.url.path.startswith("/api/observability/"):
+        # 星图观测台豁免（2026-08-21）：本地观测数据（统计非操作），浏览器直开 /obs 可见
         auth = request.headers.get("authorization", "")
         if auth != f"Bearer {SHIGUANG_TOKEN}":
             return JSONResponse(status_code=401, content={"detail": "unauthorized"})
@@ -795,6 +800,13 @@ async def chat(req: ChatRequest, request: Request) -> StreamingResponse:
         yield _sse({"type": "done", "session_id": sid})
 
     return StreamingResponse(gen(), media_type="text/event-stream")
+
+
+@app.get("/obs", include_in_schema=False)
+def obs_page():
+    """星图观测台（可观测性统一入口，独立于前端构建）"""
+    p = Path(__file__).resolve().parent / "obs.html"
+    return FileResponse(p)
 
 
 @app.get("/", include_in_schema=False)
