@@ -87,6 +87,14 @@ export default function InputBar({ onOpenDebate, sagesPending }: { onOpenDebate?
             </span>
           )}
         </button>
+        <button
+          onClick={() => window.open('/obs', '_blank')}
+          className="w-10 h-10 shrink-0 rounded-lg border border-hairline bg-surface flex items-center justify-center hover:bg-elevated active:scale-95 transition-all duration-150"
+          aria-label="星图（观测台）"
+          title="星图：系统观测台（token/工具/错误/延迟）"
+        >
+          <span className="text-[15px] leading-none" style={{ color: '#D9A441' }}>✦</span>
+        </button>
         <textarea
           ref={textRef}
           value={text}

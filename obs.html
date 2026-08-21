@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>拾光 · 星图</title>
+<style>
+  :root{
+    --bg:#0B0F14; --bg2:#111722; --card:#151C28; --line:#232D3D;
+    --teal:#3EC9B0; --teal-dim:#2A7A6D; --gold:#D9A441; --red:#E05B6D;
+    --ink:#E6EDF3; --muted:#8B98A9;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{
+    background:var(--bg); color:var(--ink);
+    font:400 14px/1.6 -apple-system,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;
+    min-height:100vh; position:relative; overflow-x:hidden;
+  }
+  /* 星空背景 */
+  .stars{position:fixed;inset:0;pointer-events:none;z-index:0;background:transparent}
+  .stars span{
+    position:absolute;border-radius:50%;background:#fff;opacity:.25;
+    animation:twinkle 4s ease-in-out infinite;
+  }
+  @keyframes twinkle{0%,100%{opacity:.15}50%{opacity:.6}}
+  .wrap{position:relative;z-index:1;max-width:1060px;margin:0 auto;padding:28px 22px 60px}
+
+  header{display:flex;align-items:baseline;justify-content:space-between;margin-bottom:22px;flex-wrap:wrap;gap:10px}
+  h1{font-size:26px;font-weight:700;letter-spacing:.5px}
+  h1 .star{color:var(--gold);margin-right:6px}
+  h1 .sub{font-size:13px;color:var(--muted);font-weight:400;margin-left:10px;letter-spacing:2px}
+  .meta{display:flex;align-items:center;gap:14px;color:var(--muted);font-size:12px}
+  button{
+    background:linear-gradient(135deg,var(--teal),#2A9B87);color:#04241D;border:none;
+    padding:7px 18px;border-radius:8px;font-weight:600;cursor:pointer;font-size:13px;
+    box-shadow:0 2px 12px rgba(62,201,176,.25);transition:transform .15s;
+  }
+  button:hover{transform:translateY(-1px)}
+
+  /* 指标卡 */
+  .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px;margin-bottom:18px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px 18px;position:relative;overflow:hidden}
+  .card::before{content:'';position:absolute;top:0;left:0;right:0;height:2px;background:linear-gradient(90deg,var(--teal),transparent)}
+  .card .k{color:var(--muted);font-size:12px;letter-spacing:1px}
+  .card .v{font-size:26px;font-weight:700;margin-top:6px;color:var(--ink)}
+  .card .v small{font-size:13px;color:var(--muted);font-weight:400}
+  .card.gold::before{background:linear-gradient(90deg,var(--gold),transparent)}
+  .card.red::before{background:linear-gradient(90deg,var(--red),transparent)}
+
+  /* 面板 */
+  .panel{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:18px;margin-bottom:16px}
+  .panel h2{font-size:15px;font-weight:600;margin-bottom:14px;color:var(--teal)}
+  .panel h2 .dot{color:var(--gold);margin-right:6px}
+
+  /* 工具条形 */
+  .bar-row{display:flex;align-items:center;gap:10px;margin-bottom:9px}
+  .bar-name{width:150px;color:var(--muted);font-size:12px;text-align:right;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .bar-track{flex:1;background:var(--bg2);border-radius:6px;height:20px;position:relative;overflow:hidden}
+  .bar-fill{height:100%;border-radius:6px;background:linear-gradient(90deg,var(--teal-dim),var(--teal));transition:width .6s ease}
+  .bar-meta{width:110px;font-size:11px;color:var(--muted)}
+
+  /* 折线图 */
+  .chart{width:100%}
+  .legend{display:flex;gap:16px;color:var(--muted);font-size:12px;margin-top:8px}
+
+  /* 错误 */
+  .err-row{display:flex;align-items:center;gap:10px;margin-bottom:8px}
+  .err-name{width:180px;color:var(--muted);font-size:12px;text-align:right}
+  .err-track{flex:1;background:var(--bg2);border-radius:6px;height:16px;overflow:hidden}
+  .err-fill{height:100%;background:linear-gradient(90deg,#8A3B49,var(--red));border-radius:6px}
+
+  .empty{color:var(--muted);text-align:center;padding:30px 0;font-size:13px}
+  footer{color:var(--muted);font-size:11px;text-align:center;margin-top:26px;letter-spacing:1px}
+</style>
+</head>
+<body>
+<div class="stars" id="stars"></div>
+<div class="wrap">
+  <header>
+    <h1><span class="star">✦</span>拾光 · 星图<span class="sub">LUMEN OBSERVATORY</span></h1>
+    <div class="meta"><span id="genAt">—</span><button onclick="load()">刷新</button></div>
+  </header>
+
+  <div class="cards">
+    <div class="card"><div class="k">TOKEN 消耗（近 14 天）</div><div class="v" id="cToken">—</div></div>
+    <div class="card"><div class="k">工具调用（累计）</div><div class="v" id="cTools">—</div></div>
+    <div class="card red"><div class="k">错误事件</div><div class="v" id="cErr">—</div></div>
+    <div class="card gold"><div class="k">对话平均延迟</div><div class="v" id="cDelay">—</div></div>
+  </div>
+
+  <div class="panel">
+    <h2><span class="dot">◆</span>工具调用 Top（次数 · 成功率 · 平均耗时）</h2>
+    <div id="toolsChart"></div>
+  </div>
+
+  <div class="panel">
+    <h2><span class="dot">◆</span>Token 消耗趋势（近 14 天）</h2>
+    <div id="tokenChart"></div>
+    <div class="legend"><span>■ Token / 天</span><span id="tokenTotal"></span></div>
+  </div>
+
+  <div class="panel">
+    <h2><span class="dot">◆</span>错误分布</h2>
+    <div id="errChart"></div>
+  </div>
+
+  <footer>拾光 Lumen · 星图观测台 —— 数据给觉察，不给判断</footer>
+</div>
+
+<script>
+const fmt = n => n>=10000 ? (n/10000).toFixed(1)+'万' : n.toLocaleString();
+
+// 星空点缀
+(function(){
+  const s = document.getElementById('stars');
+  for(let i=0;i<60;i++){
+    const sp = document.createElement('span');
+    const sz = Math.random()*2+0.5;
+    sp.style.cssText = `left:${Math.random()*100}%;top:${Math.random()*100}%;width:${sz}px;height:${sz}px;animation-delay:${Math.random()*4}s`;
+    s.appendChild(sp);
+  }
+})();
+
+async function load(){
+  try{
+    const r = await fetch('/api/observability/summary');
+    const d = await r.json();
+    document.getElementById('genAt').textContent = '更新于 ' + (d.generated_at||'—');
+
+    const t = d.trace||{}, tok = d.token||{};
+    document.getElementById('cToken').innerHTML = fmt(tok.total||0)+' <small>tok</small>';
+    document.getElementById('cTools').textContent = fmt(t.tool_calls||0);
+    document.getElementById('cErr').textContent = (Object.values(t.errors||{}).reduce((a,b)=>a+b,0) + (d.council_errors||0));
+    document.getElementById('cDelay').innerHTML = ((t.avg_delay_ms||0)/1000).toFixed(1)+' <small>s</small>';
+
+    drawTools(t.tool_stats||[]);
+    drawToken(tok.by_day||[]);
+    drawErrors(t.errors||{}, d.council_errors||0);
+  }catch(e){
+    document.getElementById('genAt').textContent = '加载失败: ' + e.message;
+  }
+}
+
+function drawTools(list){
+  const el = document.getElementById('toolsChart');
+  if(!list.length){el.innerHTML='<div class="empty">暂无工具调用记录（开始对话后自动积累）</div>';return}
+  const max = Math.max(...list.map(x=>x.calls));
+  el.innerHTML = list.slice(0,8).map(x=>{
+    const w = Math.max(3, x.calls/max*100);
+    const rate = x.success_rate||0;
+    const rateColor = rate>=90?'var(--teal)':rate>=60?'var(--gold)':'var(--red)';
+    return `<div class="bar-row">
+      <div class="bar-name" title="${x.name}">${x.name}</div>
+      <div class="bar-track"><div class="bar-fill" style="width:${w}%"></div></div>
+      <div class="bar-meta">${x.calls} 次 · <span style="color:${rateColor}">${rate}%</span> · ${x.avg_ms}ms</div>
+    </div>`;
+  }).join('');
+}
+
+function drawToken(days){
+  const el = document.getElementById('tokenChart');
+  if(!days.length){el.innerHTML='<div class="empty">暂无 token 记录</div>';return}
+  const W=920,H=150,P=28,step=(W-P*2)/Math.max(days.length-1,1);
+  const maxV=Math.max(...days.map(x=>x.tokens),1);
+  const pts = days.map((x,i)=>[P+i*step, H-P-(x.tokens/maxV)*(H-P*2)]).map(p=>p.join(',')).join(' ');
+  const area = `${P},${H-P} ${pts} ${W-P},${H-P}`;
+  const grid = [0.25,0.5,0.75].map(g=>{
+    const y = H-P-(H-P*2)*g;
+    return `<line x1="${P}" y1="${y}" x2="${W-P}" y2="${y}" stroke="#232D3D" stroke-width="1" stroke-dasharray="3 4"/>`;
+  }).join('');
+  el.innerHTML = `<svg class="chart" viewBox="0 0 ${W} ${H}">
+    ${grid}
+    <polygon points="${area}" fill="rgba(62,201,176,.08)"/>
+    <polyline points="${pts}" fill="none" stroke="var(--teal)" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>
+    ${days.map((x,i)=>`<circle cx="${P+i*step}" cy="${H-P-(x.tokens/maxV)*(H-P*2)}" r="3.5" fill="var(--gold)"/>`).join('')}
+  </svg>`;
+  const total = days.reduce((a,b)=>a+b.tokens,0);
+  document.getElementById('tokenTotal').textContent = `合计 ${fmt(total)} tok · ${days[0]?.date} ~ ${days[days.length-1]?.date}`;
+}
+
+function drawErrors(errs, councilErr){
+  const el = document.getElementById('errChart');
+  const items = Object.entries(errs).sort((a,b)=>b[1]-a[1]);
+  if(!items.length && !councilErr){el.innerHTML='<div class="empty">无错误记录 —— 系统运行平稳</div>';return}
+  const max = Math.max(...items.map(x=>x[1]), councilErr, 1);
+  let html = items.map(([k,v])=>{
+    const w = v/max*100;
+    return `<div class="err-row"><div class="err-name">${k}</div><div class="err-track"><div class="err-fill" style="width:${w}%"></div></div><div style="width:40px;font-size:11px;color:var(--muted)">${v}</div></div>`;
+  }).join('');
+  if(councilErr){
+    const w = councilErr/max*100;
+    html += `<div class="err-row"><div class="err-name">会议失败(council_errors)</div><div class="err-track"><div class="err-fill" style="width:${w}%"></div></div><div style="width:40px;font-size:11px;color:var(--muted)">${councilErr}</div></div>`;
+  }
+  el.innerHTML = html;
+}
+
+load();
+setInterval(load, 30000);
+</script>
+</body>
+</html>
