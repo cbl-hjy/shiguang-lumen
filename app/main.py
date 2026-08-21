@@ -724,6 +724,7 @@ async def chat(req: ChatRequest, request: Request) -> StreamingResponse:
                         pass
                     messages = msgs
                     state["messages"] = msgs  # B1 引用同步（_finalize 读 state——548 行重新赋值会断引用）
+                    obs.llm_end(run_id, tag, True)  # LLM 调用成功（2026-08-21 补：配对算耗时）
                     circuit_record(True)
                     break
                 # 空 content（166 轮 0 字场景的正主）：无文本且无工具调用 → 确定性判定（有没有字/有没有调工具）
@@ -739,12 +740,14 @@ async def chat(req: ChatRequest, request: Request) -> StreamingResponse:
             except asyncio.TimeoutError:
                 # #6 整轮流超时（asyncio.timeout 总护栏 240s 触发）——剩余预算耗尽，直接 error，不再重试
                 error_msg = "请求总时长超限（240s）"
+                obs.llm_end(run_id, tag, False)
                 obs.error(run_id, "timeout", f"{tag} 触发总护栏 240s")
                 print(f"[chat-timeout] 会话 {sid[:8]} {tag} 触发总护栏 240s", flush=True)
                 circuit_record(False)
                 messages = []
                 break
             except Exception as e:
+                obs.llm_end(run_id, tag, False)  # LLM 调用异常（2026-08-21 补）
                 if i < len(attempts) - 1 and should_fallback(e):
                     obs.error(run_id, "llm_fallback", f"{tag} 异常→fallback: {str(e)[:120]}")
                     print(f"[fallback] 会话 {sid[:8]} {tag} 异常→fallback: {str(e)[:120]}", flush=True)

@@ -90,6 +90,11 @@
   </div>
 
   <div class="panel">
+    <h2><span class="dot">◆</span>LLM 调用（tag · 次数 · 成功率 · 平均耗时）</h2>
+    <div id="llmChart"></div>
+  </div>
+
+  <div class="panel">
     <h2><span class="dot">◆</span>工具调用 Top（次数 · 成功率 · 平均耗时）</h2>
     <div id="toolsChart"></div>
   </div>
@@ -128,18 +133,43 @@ async function load(){
     const d = await r.json();
     document.getElementById('genAt').textContent = '更新于 ' + (d.generated_at||'—');
 
-    const t = d.trace||{}, tok = d.token||{};
+    const t = d.trace||{}, tok = d.token||{}, integ = d.integrity||{};
     document.getElementById('cToken').innerHTML = fmt(tok.total||0)+' <small>tok</small>';
     document.getElementById('cTools').textContent = fmt(t.tool_calls||0);
     document.getElementById('cErr').textContent = (Object.values(t.errors||{}).reduce((a,b)=>a+b,0) + (d.council_errors||0));
     document.getElementById('cDelay').innerHTML = ((t.avg_delay_ms||0)/1000).toFixed(1)+' <small>s</small>';
 
+    // 完整性指标（数据可信的前提：事件/损坏行/写失败/run 对账）
+    const openRuns = (integ.runs_started||0) - (integ.runs_ended||0);
+    const badSum = (integ.corrupt_lines||0) + (integ.write_fails||0);
+    const integMsg = badSum===0 ? `<span style="color:var(--teal)">✓ 完整</span> · 事件 ${fmt(integ.events||0)} · 进行中 ${openRuns}`
+      : `<span style="color:var(--red)">⚠ 数据缺失</span> · 损坏 ${integ.corrupt_lines||0} 行 · 写失败 ${integ.write_fails||0}（排查磁盘/权限）`;
+    document.getElementById('genAt').innerHTML = `更新于 ${d.generated_at||'—'} · <span style="font-size:11px">${integMsg}</span>`;
+
+    drawLlm(t.llm_stats||[]);
     drawTools(t.tool_stats||[]);
     drawToken(tok.by_day||[]);
     drawErrors(t.errors||{}, d.council_errors||0);
   }catch(e){
     document.getElementById('genAt').textContent = '加载失败: ' + e.message;
   }
+}
+
+function drawLlm(list){
+  const el = document.getElementById('llmChart');
+  if(!list.length){el.innerHTML='<div class="empty">暂无 LLM 调用记录</div>';return}
+  const max = Math.max(...list.map(x=>x.calls));
+  el.innerHTML = list.map(x=>{
+    const w = Math.max(4, x.calls/max*100);
+    const rate = x.success_rate||0;
+    const rateColor = rate>=90?'var(--teal)':rate>=60?'var(--gold)':'var(--red)';
+    const unf = x.unfinished>0 ? ` · <span style="color:#6B7789" title="历史/进行中的调用无结束标记">未配对 ${x.unfinished}</span>` : '';
+    return `<div class="bar-row">
+      <div class="bar-name" title="${x.tag}">${x.tag}</div>
+      <div class="bar-track" style="background:var(--bg2)"><div class="bar-fill" style="width:${w}%;background:linear-gradient(90deg,#5A3FA8,#8A6FE8)"><span class="bar-num">${x.calls}</span></div></div>
+      <div class="bar-meta">${x.calls} 次 · <span style="color:${rateColor}">${rate}%</span> · ${x.avg_ms}ms${unf}</div>
+    </div>`;
+  }).join('');
 }
 
 function drawTools(list){

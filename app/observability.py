@@ -21,15 +21,24 @@ from app.config import DATA_DIR
 
 TRACE_FILE = DATA_DIR / "data" / "trace_log.jsonl"
 
+# 完整性校验（2026-08-21 补洞：_write 失败不再静默——计数暴露给星图，数据缺失可见）
+_write_fails = 0
+
 
 def _write(ev: dict) -> None:
+    global _write_fails
     ev.setdefault("ts", time.strftime("%Y-%m-%d %H:%M:%S"))
     try:
         TRACE_FILE.parent.mkdir(parents=True, exist_ok=True)
         with TRACE_FILE.open("a", encoding="utf-8") as f:
             f.write(json.dumps(ev, ensure_ascii=False) + "\n")
     except Exception:
-        pass
+        _write_fails += 1
+
+
+def write_fail_count() -> int:
+    """观测台完整性校验：trace 写入失败次数（>0 = 数据有缺失，需排查磁盘/权限）"""
+    return _write_fails
 
 
 def new_run_id() -> str:
@@ -43,6 +52,12 @@ def run_start(run_id: str, sid: str, text: str) -> None:
 
 def llm_start(run_id: str, tag: str, model: str) -> None:
     _write({"type": "llm_start", "run_id": run_id, "tag": tag, "model": str(model)})
+
+
+def llm_end(run_id: str, tag: str, ok: bool = True) -> None:
+    """LLM 调用结束（2026-08-21 补：与 llm_start 配对算单次 LLM 耗时——对齐 GenAI operation.duration）。
+    ok=False 表示该次调用失败（异常/超时），聚合时计入失败率。"""
+    _write({"type": "llm_end", "run_id": run_id, "tag": tag, "status": "ok" if ok else "error"})
 
 
 def tool_start(run_id: str, name: str, args: str, call_id: str | None = None) -> None:

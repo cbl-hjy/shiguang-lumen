@@ -21,10 +21,12 @@ TOKEN_CSV = DATA_DIR / "data" / "token_usage.csv"
 COUNCIL_ERR = DATA_DIR / "data" / "logs" / "council_errors.log"
 
 
-def _read_trace() -> list[dict]:
+def _read_trace() -> tuple[list[dict], int]:
+    """返回 (事件列表, 损坏行数)——损坏行计数供完整性校验（数据缺失可见）"""
     if not TRACE.exists():
-        return []
+        return [], 0
     out = []
+    corrupt = 0
     for line in TRACE.read_text(encoding="utf-8", errors="replace").splitlines():
         line = line.strip()
         if not line.startswith("{"):
@@ -32,22 +34,44 @@ def _read_trace() -> list[dict]:
         try:
             out.append(json.loads(line))
         except json.JSONDecodeError:
-            continue
-    return out
+            corrupt += 1
+    return out, corrupt
 
 
 def _agg_trace(evs: list[dict]) -> dict:
-    """聚合 trace：工具调用（次数/成功率/平均耗时）、错误、对话延迟"""
+    """聚合 trace：工具调用（次数/成功率/平均耗时）、LLM 调用、错误、对话延迟"""
     tools: dict[str, dict] = defaultdict(lambda: {"calls": 0, "ok": 0, "err": 0, "total_ms": 0})
-    # 工具耗时：按 (run_id, name) 顺序配对 start/end（trace 事件有 ts 时间戳）
+    # LLM 调用（2026-08-21 补：对齐 GenAI operation.duration 语义——llm_start/llm_end 配对算耗时）
+    llms: dict[str, dict] = defaultdict(lambda: {"calls": 0, "ok": 0, "err": 0, "total_ms": 0})
     starts: dict[tuple, str] = {}
+    llm_starts: dict[tuple, str] = {}
     errors: dict[str, int] = defaultdict(int)
     run_durs: list[int] = []
     n_tools = 0
+    runs_started = runs_ended = 0
 
     for ev in evs:
         t = ev.get("type")
-        if t == "tool_start":
+        if t == "run_start":
+            runs_started += 1
+        elif t == "run_end":
+            runs_ended += 1
+            d = ev.get("dur_ms")
+            if isinstance(d, (int, float)) and d > 0:
+                run_durs.append(int(d))
+        elif t == "llm_start":
+            llm_starts[(ev.get("run_id"), ev.get("tag", "?"))] = ev.get("ts", "")
+            llms[ev.get("tag", "?")]["calls"] += 1
+        elif t == "llm_end":
+            tag = ev.get("tag", "?")
+            llms[tag][("ok" if ev.get("status", "ok") == "ok" else "err")] += 1
+            key = (ev.get("run_id"), tag)
+            if key in llm_starts:
+                st = llm_starts.pop(key)
+                ms = _ts_diff_ms(st, ev.get("ts", ""))
+                if ms is not None:
+                    llms[tag]["total_ms"] += ms
+        elif t == "tool_start":
             key = (ev.get("run_id"), ev.get("name"))
             starts[key] = ev.get("ts", "")
             tools[ev.get("name", "?")]["calls"] += 1
@@ -70,10 +94,6 @@ def _agg_trace(evs: list[dict]) -> dict:
                     tools[name]["total_ms"] += ms
         elif t == "error":
             errors[ev.get("where", "unknown")] += 1
-        elif t == "run_end":
-            d = ev.get("dur_ms")
-            if isinstance(d, (int, float)) and d > 0:
-                run_durs.append(int(d))
 
     # 工具统计列表（按调用数排序）
     tool_stats = []
@@ -86,6 +106,21 @@ def _agg_trace(evs: list[dict]) -> dict:
                            "success_rate": round(rate, 1), "avg_ms": round(avg_ms)})
     tool_stats.sort(key=lambda x: -x["calls"])
 
+    # LLM 统计（tag=primary/fallback/子agent等）
+    # 兼容性（2026-08-21）：llm_end 是新增事件，历史 llm_start 无配对——unfinished 单独标注，
+    # 成功率只看有配对的（ok/(ok+err)），避免历史数据把成功率拉失真
+    llm_stats = []
+    for tag, s in llms.items():
+        calls = s["calls"]
+        ok = s["ok"] + s["err"]
+        unfinished = calls - ok
+        rate = (s["ok"] / ok * 100) if ok else 0
+        avg_ms = (s["total_ms"] / ok) if ok else 0
+        llm_stats.append({"tag": tag, "calls": calls, "success": s["ok"], "fail": s["err"],
+                          "unfinished": max(0, unfinished),
+                          "success_rate": round(rate, 1), "avg_ms": round(avg_ms)})
+    llm_stats.sort(key=lambda x: -x["calls"])
+
     # 延迟：平均 + p95
     avg_ms = round(sum(run_durs) / len(run_durs)) if run_durs else 0
     p95 = 0
@@ -95,8 +130,11 @@ def _agg_trace(evs: list[dict]) -> dict:
 
     return {
         "runs": len(run_durs),
+        "runs_started": runs_started,
+        "runs_ended": runs_ended,
         "tool_calls": n_tools,
         "tool_stats": tool_stats,
+        "llm_stats": llm_stats,
         "errors": dict(sorted(errors.items(), key=lambda x: -x[1])),
         "avg_delay_ms": avg_ms,
         "p95_delay_ms": p95,
@@ -156,12 +194,21 @@ def _agg_council_errors() -> int:
 
 @router.get("/summary")
 def observability_summary():
-    evs = _read_trace()
+    evs, corrupt = _read_trace()
     trace = _agg_trace(evs)
     token = _agg_token()
+    from app import observability as _obs
+
     return {
         "trace": trace,
         "token": token,
         "council_errors": _agg_council_errors(),
+        "integrity": {
+            "events": len(evs),
+            "corrupt_lines": corrupt,
+            "write_fails": _obs.write_fail_count(),
+            "runs_started": trace.get("runs_started", 0),
+            "runs_ended": trace.get("runs_ended", 0),
+        },
         "generated_at": __import__("datetime").datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     }
