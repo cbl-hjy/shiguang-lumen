@@ -57,20 +57,7 @@
 
 ## 🏗️ 架构
 
-```mermaid
-graph TD
-    FE["React 前端<br/>三栏：学习路径 | 聊天 | 星阁"] -->|"SSE /api"| API[FastAPI 入口]
-    API --> TUTOR["拾光大脑<br/>Pydantic AI Agent"]
-    TUTOR --> MEM["记忆层<br/>状态轮 + 9字段 + 三因子检索"]
-    TUTOR --> COUNCIL["先贤会议<br/>星宿 × RAPTOR 树"]
-    TUTOR --> TOOLS["工具集<br/>搜索/识图/OCR/沙箱/知识库"]
-    MEM --> VEC[("ChromaDB<br/>bge-m3 向量")]
-    COUNCIL --> TREES[("RAPTOR 树<br/>星阁 JSON")]
-    TOOLS --> OLLAMA[Ollama<br/>embedding 服务]
-    TOOLS --> VISION[GLM-4.6V<br/>视觉理解]
-    TOOLS --> SEARCH["Tavily + 博查<br/>双源搜索"]
-    TOOLS --> KB["LlamaIndex<br/>个人知识库"]
-```
+<img src="assets/architecture.svg" alt="拾光 Lumen 系统架构" width="100%"/>
 
 | 模块 | 说明 |
 |---|---|
