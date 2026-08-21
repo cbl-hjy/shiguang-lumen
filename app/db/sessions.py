@@ -3,7 +3,7 @@
 """
 import sqlite3
 import uuid
-from pathlib import Path
+from contextlib import contextmanager
 from app.config import DATA_DIR
 
 DB_PATH = DATA_DIR / "data" / "sessions.db"
@@ -17,8 +17,20 @@ def get_conn() -> sqlite3.Connection:
     return conn
 
 
+@contextmanager
+def db_session():
+    """连接会话：with 只管理事务不关闭连接（2026-08-18 测试 ResourceWarning 挖出）——
+    这里补 finally close，杜绝连接泄漏（24 处调用点统一走此入口）。"""
+    conn = get_conn()
+    try:
+        with conn:
+            yield conn
+    finally:
+        conn.close()
+
+
 def init_db():
-    with get_conn() as conn:
+    with db_session() as conn:
         conn.execute(
             "CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, title TEXT, created_at TEXT DEFAULT (datetime('now','localtime')))"
         )
@@ -47,42 +59,28 @@ def init_db():
 
 def new_session() -> str:
     sid = uuid.uuid4().hex[:12]
-    with get_conn() as conn:
+    with db_session() as conn:
         conn.execute("INSERT INTO sessions (id) VALUES (?)", (sid,))
     return sid
 
 
 def session_exists(sid: str) -> bool:
-    with get_conn() as conn:
+    with db_session() as conn:
         row = conn.execute("SELECT id FROM sessions WHERE id=?", (sid,)).fetchone()
     return row is not None
 
 
-def save_run(sid: str, user_text: str, messages_json: str, is_retry: bool = False):
-    """流结束后保存：用户消息 + 完整对话链（all_messages_json 供下次重放）；首次消息生成会话标题。
-
-    #6 去重：用户重试同一消息时不落双份——
-    - is_retry=True（前端 X-Retry 标志，重试必带）：直接覆盖该轮 assistant 链
-    - 无标志但最后一条 user 消息内容相同 且 120s 内：视为重试（时间窗口防"继续讲讲"复读误吞）
-    - 否则：正常插入"""
-    from datetime import datetime
-
-    with get_conn() as conn:
+def save_user_message(sid: str, user_text: str) -> None:
+    """B1 消息级持久化（2026-08-20）：用户消息【无条件前置落库】——请求开始即调用，断流也不丢用户输入。
+    与 save_assistant_message 配合（拆原 save_run）：用户消息先落，assistant 链 finally 兜底。
+    去重：与最后一条 user 消息内容相同且 120s 内 → 跳过插入（重试语义在 assistant 层处理）。"""
+    with db_session() as conn:
         last = conn.execute(
             "SELECT id, content, created_at FROM messages WHERE session_id=? AND role='user' ORDER BY id DESC LIMIT 1",
             (sid,),
         ).fetchone()
-        if last and (is_retry or _is_recent_duplicate(last, user_text)):
-            # 覆盖：找到紧随该 user 消息的 assistant 行，替换 messages_json（成功链盖失败链），不新增行
-            arow = conn.execute(
-                "SELECT id FROM messages WHERE session_id=? AND role='assistant' AND id>? ORDER BY id LIMIT 1",
-                (sid, last["id"]),
-            ).fetchone()
-            if arow:
-                conn.execute(
-                    "UPDATE messages SET messages_json=? WHERE id=?", (messages_json, arow["id"])
-                )
-            return
+        if last and _is_recent_duplicate(last, user_text):
+            return  # 同内容重试/复读——不重复插 user 行
         row = conn.execute(
             "SELECT COUNT(*) AS c FROM messages WHERE session_id=?", (sid,)
         ).fetchone()
@@ -93,6 +91,33 @@ def save_run(sid: str, user_text: str, messages_json: str, is_retry: bool = Fals
             "INSERT INTO messages (session_id, role, content, messages_json) VALUES (?,?,?,?)",
             (sid, "user", user_text, ""),
         )
+
+
+def save_assistant_message(sid: str, user_text: str, messages_json: str, is_retry: bool = False) -> None:
+    """B1 finally 兜底（2026-08-20）：找该轮 user 消息后的 assistant 行——有则覆盖（重试）/ 无则插入。
+    同步函数（无 await，CancelledError 只注入 await 点 → finally 里可可靠执行）。
+    去重分工：user 行去重归 save_user_message（重试不插新 user 行）；assistant 行按"user 后有无行"判定——
+    修正 2026-08-20：原按 120s 内容重复判定会把"本轮刚插的 user 行"误判成重试导致 assistant 不落（测试抓出）。"""
+    with db_session() as conn:
+        last = conn.execute(
+            "SELECT id, content, created_at FROM messages WHERE session_id=? AND role='user' ORDER BY id DESC LIMIT 1",
+            (sid,),
+        ).fetchone()
+        if not last:
+            return  # user 行未落（极端）——save_user_message 已尽力，assistant 不强插
+        arow = conn.execute(
+            "SELECT id FROM messages WHERE session_id=? AND role='assistant' AND id>? ORDER BY id LIMIT 1",
+            (sid, last["id"]),
+        ).fetchone()
+        if arow:
+            # 该轮已有 assistant 行（重试/复跑）——B2 修复（2026-08-20）：**失败不销毁**——
+            # 空链（失败 messages_json=''）不覆盖非空链（可能是压缩保留行=早期上下文唯一载体，
+            # 覆盖成空 → 下一轮读 None → 摘要注入不了 → 压缩前上下文永久丢失，复现见 B2）
+            if messages_json:
+                conn.execute(
+                    "UPDATE messages SET messages_json=? WHERE id=?", (messages_json, arow["id"])
+                )
+            return
         conn.execute(
             "INSERT INTO messages (session_id, role, content, messages_json) VALUES (?,?,?,?)",
             (sid, "assistant", "(streamed)", messages_json),
@@ -109,7 +134,7 @@ def clear_old_chains(sid: str) -> int:
     无清理机制——哪天嫌多再加阈值）。归档失败不阻塞主流程（保险不是主流程）。"""
     from datetime import datetime
 
-    with get_conn() as conn:
+    with db_session() as conn:
         last = conn.execute(
             "SELECT MAX(id) m FROM messages WHERE session_id=?", (sid,)
         ).fetchone()["m"]
@@ -135,7 +160,7 @@ def clear_old_chains(sid: str) -> int:
 
 def vacuum():
     """#5 文件收缩：清空旧链后 SQLite 文件不自动释放——VACUUM 重写（启动时调用，无并发锁库安全）"""
-    with get_conn() as conn:
+    with db_session() as conn:
         conn.execute("VACUUM")
 
 
@@ -154,7 +179,7 @@ def _is_recent_duplicate(last_row, user_text: str) -> bool:
 
 def list_sessions(limit: int = 50) -> list[dict]:
     """历史会话列表（B）：id + 标题 + 时间 + 消息数，按最近排"""
-    with get_conn() as conn:
+    with db_session() as conn:
         rows = conn.execute(
             "SELECT s.id, s.title, s.created_at,"
             " (SELECT COUNT(*) FROM messages m WHERE m.session_id = s.id) AS msg_count"
@@ -164,9 +189,40 @@ def list_sessions(limit: int = 50) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+def delete_session(sid: str) -> bool:
+    """用户治理权（2026-08-18 补洞）：删除一个会话。
+    安全设计：归档先行（完整对话链追加到 data/archive/<sid>.jsonl），归档成功才删库行——
+    删了也能找回（archive 是 append-only 日志性质），防误删=不可逆损失。
+    返回 True=删除成功 / False=会话不存在（幂等）。"""
+    from datetime import datetime
+
+    with db_session() as conn:
+        row = conn.execute("SELECT title FROM sessions WHERE id=?", (sid,)).fetchone()
+        if not row:
+            return False
+        # 1. 归档完整对话（所有非空 messages_json 链 + 标题头）
+        try:
+            ARCHIVE_DIR.mkdir(parents=True, exist_ok=True)
+            chains = conn.execute(
+                "SELECT messages_json FROM messages WHERE session_id=? AND messages_json<>'' ORDER BY id",
+                (sid,),
+            ).fetchall()
+            with open(ARCHIVE_DIR / f"{sid}.jsonl", "w", encoding="utf-8") as f:
+                f.write(f"# title: {row['title'] or ''}\n")
+                for ch in chains:
+                    f.write(f"{datetime.now().isoformat(timespec='seconds')}\t{ch['messages_json']}\n")
+        except Exception as e:
+            print(f"[archive] 会话 {sid[:8]} 删除前归档失败——放弃删除（不可逆操作需归档兜底）: {e}", flush=True)
+            return False
+        # 2. 归档成功 → 删库行
+        conn.execute("DELETE FROM messages WHERE session_id=?", (sid,))
+        conn.execute("DELETE FROM sessions WHERE id=?", (sid,))
+        return True
+
+
 def load_messages_json(sid: str) -> str | None:
     """取最近一次 run 的完整对话链 JSON（pydantic-ai ModelMessage 序列化）"""
-    with get_conn() as conn:
+    with db_session() as conn:
         row = conn.execute(
             "SELECT messages_json FROM messages WHERE session_id=? AND messages_json<>'' ORDER BY id DESC LIMIT 1",
             (sid,),
@@ -174,24 +230,47 @@ def load_messages_json(sid: str) -> str | None:
     return row["messages_json"] if row else None
 
 
+# ---------- 先贤会议辩论消息（M3，2026-08-19：复用 messages 表，role='debate'）----------
+
+def save_debate_event(sid: str, event_json: str):
+    """持久化一条辩论事件（budget/turn/verdict/report...）——role='debate' 行，按 id 保序"""
+    if not sid:
+        return
+    with db_session() as conn:
+        conn.execute(
+            "INSERT INTO messages (session_id, role, content) VALUES (?,?,?)",
+            (sid, "debate", event_json),
+        )
+
+
+def load_debate_events(sid: str) -> list[dict]:
+    """会话的全部辩论事件（按 id 升序），用于前端消息流合并恢复"""
+    with db_session() as conn:
+        rows = conn.execute(
+            "SELECT id, content FROM messages WHERE session_id=? AND role='debate' ORDER BY id ASC",
+            (sid,),
+        ).fetchall()
+    return [{"id": r["id"], "event": r["content"]} for r in rows]
+
+
 # ---------- 长程 compaction（Pi 机制轻量版：摘要 + 尾部保留）----------
 
 def get_summary(sid: str) -> str | None:
     """已压缩会话的摘要；未压缩返回 None"""
-    with get_conn() as conn:
+    with db_session() as conn:
         row = conn.execute("SELECT summary FROM sessions WHERE id=?", (sid,)).fetchone()
     return row["summary"] if row else None
 
 
 def set_summary(sid: str, summary: str):
     """写入摘要（幂等；压缩后 messages 原样保留，仅上下文构建时用摘要替换）"""
-    with get_conn() as conn:
+    with db_session() as conn:
         conn.execute("UPDATE sessions SET summary=? WHERE id=?", (summary, sid))
 
 
 def messages_total_chars(sid: str) -> int:
     """该会话消息内容累计字符数（触发压缩的估算依据；中文≈1字符≈1 token 保守估）"""
-    with get_conn() as conn:
+    with db_session() as conn:
         row = conn.execute(
             "SELECT COALESCE(SUM(LENGTH(content)), 0) AS total FROM messages WHERE session_id=?",
             (sid,),

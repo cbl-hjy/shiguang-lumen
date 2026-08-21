@@ -45,21 +45,21 @@ export default function ActivityMeter() {
       {active ? (
         <>
           <Icon name="loader" size={13} className="text-primary animate-spin shrink-0" />
-          <span className="text-[rgba(236,233,225,0.75)]">
+          <span className="text-ink/80">
             正在执行 <span className="text-primary">{active.name}</span>
           </span>
-          <span className="text-[rgba(236,233,225,0.4)] tabular-nums">已跑 {(elapsedMs / 1000).toFixed(0)}s</span>
+          <span className="text-ink-dim tabular-nums">已跑 {(elapsedMs / 1000).toFixed(0)}s</span>
           {slow && (
-            <span className="text-[rgba(236,233,225,0.45)]">⚠️ 这一步比较慢，还在跑</span>
+            <span className="text-ink-dim">⚠️ 这一步比较慢，还在跑</span>
           )}
-          <span className="ml-auto text-[rgba(236,233,225,0.35)] tabular-nums">
+          <span className="ml-auto text-ink-dim/80 tabular-nums">
             已发起 {started} 步 · {doneCount > 0 ? `完成 ${doneCount}` : '进行中'}
           </span>
         </>
       ) : thinking ? (
         <>
-          <Icon name="loader" size={13} className="text-[rgba(236,233,225,0.5)] animate-spin shrink-0" />
-          <span className="text-[rgba(236,233,225,0.55)]">思考中…</span>
+          <Icon name="loader" size={13} className="text-ink-dim animate-spin shrink-0" />
+          <span className="text-ink-dim">思考中…</span>
         </>
       ) : null}
     </div>

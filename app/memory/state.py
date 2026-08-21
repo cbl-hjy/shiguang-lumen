@@ -5,7 +5,6 @@
 """
 import json
 from datetime import datetime
-from pathlib import Path
 from app.config import DATA_DIR
 
 STATE_FILE = DATA_DIR / "memory" / "state.json"
@@ -16,6 +15,8 @@ DIMS = ("emotion", "blocker", "pace", "willingness")
 DEFAULT_STATE = {
     "current": {},          # 当前会话状态 {dim: {value, confidence?, evidence?}}
     "last_session": {},     # 上次会话结束快照（第 2 步跨会话接续用）
+    "relation": {},         # 关系轨（慢变，2026-08-17 阶段1）：{depth, last_topic, tone, updated_at, evidence}
+    "continuation": {},     # 任务轨续接点（2026-08-17 阶段2）：{next_step, updated_at, evidence}——"下次从哪继续"
     "updated_at": "",       # 最近一次更新（ISO）
 }
 
@@ -28,6 +29,11 @@ def _load() -> dict:
         return {**DEFAULT_STATE, **d}
     except Exception:
         return dict(DEFAULT_STATE)
+
+
+def read_state() -> dict:
+    """公开读状态（聚合中枢 hub 用）：只读不写，返回完整 state（含 current/last_session/relation/continuation）"""
+    return _load()
 
 
 def _save(state: dict):
@@ -61,6 +67,15 @@ def update_state(**kwargs) -> str:
             state["current"][dim] = {"value": str(val), "confidence": "explicit"}
     state["updated_at"] = datetime.now().isoformat(timespec="minutes")
     _save(state)
+    # 画像联动（Memory Hub，2026-08-19）：状态变化也置位"记忆变化"标记 →
+    # 会话收尾时画像重提炼触发（原来只有 remember 置位，状态变化导致画像滞后——
+    # 实证：21:27"放弃正则化"写进 state 但画像 3 小时后仍未更新）
+    try:
+        from app.memory.store import mark_memory_changed
+
+        mark_memory_changed()
+    except Exception:
+        pass
     return f"已更新状态：{', '.join(updates)}"
 
 
@@ -82,6 +97,42 @@ def clear_current():
     if state["current"]:
         state["current"] = {}
         _save(state)
+
+
+def update_relation(depth: str = "", last_topic: str = "", tone: str = "", evidence: str = "") -> str:
+    """会话收尾写入关系轨（慢变，2026-08-17 阶段1）：我们之间聊到什么深度/核心话题/相处基调。
+    只写 state.json（慢变状态归状态轮，9.3 分工），不进 user_memory。无变化不调用。"""
+    state = _load()
+    rel = {}
+    if depth:
+        rel["depth"] = depth.strip()[:60]
+    if last_topic:
+        rel["last_topic"] = last_topic.strip()[:60]
+    if tone:
+        rel["tone"] = tone.strip()[:60]
+    if evidence:
+        rel["evidence"] = evidence.strip()[:120]
+    if not rel:
+        return "(关系无变化，未写入)"
+    rel["updated_at"] = datetime.now().isoformat(timespec="minutes")
+    state["relation"] = rel
+    _save(state)
+    return f"已更新关系轨：深度={rel.get('depth','')} 话题={rel.get('last_topic','')}"
+
+
+def update_continuation(next_step: str = "", evidence: str = "") -> str:
+    """会话收尾写入任务轨续接点（2026-08-17 阶段2）：下次从哪继续（学习/讨论线程）。
+    只写 state.json（快照语义，滚动覆盖），不进 user_memory（避免每周堆积）。无未完成线程不调用。"""
+    state = _load()
+    if not next_step or not next_step.strip():
+        return "(无续接点，未写入)"
+    state["continuation"] = {
+        "next_step": next_step.strip()[:120],
+        "updated_at": datetime.now().isoformat(timespec="minutes"),
+        "evidence": (evidence or "").strip()[:120],
+    }
+    _save(state)
+    return f"已更新续接点：{state['continuation']['next_step'][:40]}"
 
 
 def inject_state() -> str:
@@ -108,6 +159,20 @@ def inject_state() -> str:
                 dims.append(f"{_dim_cn(dim)}={_fmt(v)}")
         if dims:
             parts.append(f"本次会话状态（更新于 {state.get('updated_at','?')}）：{'；'.join(dims)}")
+    # 关系轨（慢变，有才注入，≤50 字）
+    rel = state.get("relation", {})
+    if rel and rel.get("last_topic"):
+        rparts = []
+        if rel.get("depth"):
+            rparts.append(f"深度={rel['depth']}")
+        if rel.get("tone"):
+            rparts.append(f"基调={rel['tone']}")
+        rparts.append(f"上次话题={rel['last_topic']}")
+        parts.append("我们之间（上次收尾）：" + "；".join(rparts))
+    # 任务轨续接点（有才注入）
+    cont = state.get("continuation", {})
+    if cont and cont.get("next_step"):
+        parts.append(f"续接点（上次收尾）：{cont['next_step'][:60]}")
     return "；".join(parts) if parts else ""
 
 

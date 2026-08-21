@@ -4,7 +4,7 @@ import { useUiStore } from '../../store/uiStore'
 import { useChatStore } from '../../store/chatStore'
 
 /* Cmd+K 命令面板：模糊搜索动作 + 键盘导航（↑↓ 选择 / Enter 执行 / Esc 关闭）
-   重度用户主导航（Linear/Cursor 范式）——学习搭子版：新对话/思考显隐/打开面板 */
+   重度用户主导航（Linear/Cursor 范式）——学习搭子版：启航/思考显隐/打开面板 */
 interface Action {
   id: string
   label: string
@@ -13,7 +13,10 @@ interface Action {
   run: () => void
 }
 
-export default function CommandPalette({ onOpenPanel }: { onOpenPanel: (p: 'path' | 'memory') => void }) {
+export default function CommandPalette({ onOpenPanel, onOpenDebate }: {
+  onOpenPanel: (p: 'path' | 'memory') => void
+  onOpenDebate: () => void
+}) {
   const open = useUiStore((s) => s.commandOpen)
   const setOpen = useUiStore((s) => s.setCommandOpen)
   const showThinking = useUiStore((s) => s.showThinking)
@@ -25,7 +28,7 @@ export default function CommandPalette({ onOpenPanel }: { onOpenPanel: (p: 'path
 
   const actions = useMemo<Action[]>(() => {
     const list: Action[] = [
-      { id: 'clear', label: '新对话', hint: '清空当前会话', icon: 'arrow-right', run: () => { clear() } },
+      { id: 'clear', label: '启航', hint: '清空当前夜谈', icon: 'arrow-right', run: () => { clear() } },
       {
         id: 'thinking',
         label: showThinking ? '隐藏思考过程' : '显示思考过程',
@@ -33,13 +36,14 @@ export default function CommandPalette({ onOpenPanel }: { onOpenPanel: (p: 'path
         icon: 'brain',
         run: toggleThinking,
       },
-      { id: 'path', label: '打开学习路径', hint: '查看目标与进度', icon: 'book', run: () => onOpenPanel('path') },
-      { id: 'memory', label: '打开记忆面板', hint: '查看与修正记忆', icon: 'user', run: () => onOpenPanel('memory') },
+      { id: 'debate', label: '问星', hint: '发起多星宿讨论', icon: 'users', run: onOpenDebate },
+      { id: 'path', label: '打开星图', hint: '查看目标与进度', icon: 'book', run: () => onOpenPanel('path') },
+      { id: 'memory', label: '打开星尘', hint: '查看与修正星尘', icon: 'user', run: () => onOpenPanel('memory') },
     ]
     const q = query.trim().toLowerCase()
     if (!q) return list
     return list.filter((a) => a.label.toLowerCase().includes(q) || a.hint.toLowerCase().includes(q))
-  }, [query, showThinking, clear, toggleThinking, onOpenPanel])
+  }, [query, showThinking, clear, toggleThinking, onOpenPanel, onOpenDebate])
 
   useEffect(() => {
     if (open) {
@@ -88,7 +92,7 @@ export default function CommandPalette({ onOpenPanel }: { onOpenPanel: (p: 'path
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center gap-2 px-4 border-b border-hairline">
-          <Icon name="search" size={15} className="text-[rgba(236,233,225,0.4)]" />
+          <Icon name="search" size={15} className="text-ink-dim" />
           <input
             ref={inputRef}
             value={query}
@@ -100,16 +104,16 @@ export default function CommandPalette({ onOpenPanel }: { onOpenPanel: (p: 'path
               else if (e.key === 'Enter' && actions[sel]) exec(actions[sel])
             }}
             placeholder="输入命令或搜索…"
-            className="flex-1 h-11 bg-transparent outline-none text-[14px] placeholder:text-[rgba(236,233,225,0.35)]"
+            className="flex-1 h-11 bg-transparent outline-none text-[14px] placeholder:text-ink-dim/80"
             aria-label="搜索命令"
           />
-          <kbd className="text-[10px] text-[rgba(236,233,225,0.35)] border border-hairline rounded px-1.5 py-0.5">
+          <kbd className="text-[10px] text-ink-dim/80 border border-hairline rounded px-1.5 py-0.5">
             Esc
           </kbd>
         </div>
         <div className="py-1.5">
           {actions.length === 0 && (
-            <div className="px-4 py-4 text-[12px] text-[rgba(236,233,225,0.4)]">没有匹配的命令</div>
+            <div className="px-4 py-4 text-[12px] text-ink-dim">没有匹配的命令</div>
           )}
           {actions.map((a, i) => (
             <button
@@ -120,9 +124,9 @@ export default function CommandPalette({ onOpenPanel }: { onOpenPanel: (p: 'path
                 i === sel ? 'bg-primary/10' : ''
               }`}
             >
-              <Icon name={a.icon} size={15} className="text-[rgba(236,233,225,0.55)]" />
-              <span className="text-[13px] text-[rgba(236,233,225,0.9)] flex-1">{highlight(a.label)}</span>
-              <span className="text-[11px] text-[rgba(236,233,225,0.35)]">{a.hint}</span>
+              <Icon name={a.icon} size={15} className="text-ink-dim" />
+              <span className="text-[13px] text-ink flex-1">{highlight(a.label)}</span>
+              <span className="text-[11px] text-ink-dim/80">{a.hint}</span>
             </button>
           ))}
         </div>

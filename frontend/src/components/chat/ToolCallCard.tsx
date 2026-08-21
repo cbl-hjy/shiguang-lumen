@@ -33,24 +33,30 @@ function argsSummary(raw?: string): string {
 
 export default function ToolCallCard({ call }: { call: ToolCall }) {
   const done = call.status === 'done'
+  const failed = call.status === 'error'
   const args = argsSummary(call.args)
   return (
     <div
-      className={`inline-flex items-center gap-1.5 mb-1.5 mr-2 px-2.5 py-1 rounded-lg border border-hairline bg-surface text-[12px] ${
-        done ? 'animate-tool-done' : ''
-      }`}
+      className={`inline-flex items-center gap-1.5 mb-1.5 mr-2 px-2.5 py-1 rounded-lg border text-[12px] ${
+        failed
+          ? 'border-error/50 bg-error/10 text-error/90'
+          : 'border-hairline bg-surface'
+      } ${done || failed ? 'animate-tool-done' : ''}`}
+      title={failed && call.result ? `工具失败：${call.result}` : undefined}
     >
-      <Icon name={TOOL_ICON[call.name] ?? 'wrench'} size={13} className="text-[rgba(236,233,225,0.6)]" />
-      <span className="text-[rgba(236,233,225,0.75)]">{call.name}</span>
-      {!done && args && (
-        <span className="text-[rgba(236,233,225,0.4)] max-w-[220px] truncate" title={args}>
+      <Icon name={TOOL_ICON[call.name] ?? 'wrench'} size={13} className={failed ? '' : 'text-ink-muted'} />
+      <span className={failed ? '' : 'text-ink/80'}>{call.name}</span>
+      {!done && !failed && args && (
+        <span className="text-ink-dim max-w-[220px] truncate" title={args}>
           {args}
         </span>
       )}
-      {done ? (
+      {failed ? (
+        <span className="text-error/90">{call.result ? `⚠ ${call.result.slice(0, 36)}` : '⚠ 失败'}</span>
+      ) : done ? (
         <Icon name="check" size={12} className="text-success" />
       ) : (
-        <span className="text-[rgba(236,233,225,0.35)]">…</span>
+        <span className="text-ink-dim/80">…</span>
       )}
     </div>
   )

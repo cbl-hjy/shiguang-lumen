@@ -6,7 +6,6 @@
 import asyncio
 from datetime import datetime
 
-from app.config import DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL, DEEPSEEK_MODEL
 from app.db import wakeups
 
 SCAN_INTERVAL = 60  # 秒（M6 验收时可改小）

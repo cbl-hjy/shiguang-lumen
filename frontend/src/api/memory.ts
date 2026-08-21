@@ -5,6 +5,7 @@ export interface MemoryEntry {
   importance: number
   date: string
   source: string
+  strength?: number // S 强度（1-5，治理权：显示"用过 N 次"，2026-08-19）
 }
 
 export interface EvolveItem {
@@ -18,6 +19,24 @@ export interface MemoryData {
   entries: MemoryEntry[]
   reflections: EvolveItem[]
   skills: EvolveItem[]
+}
+
+/* 记忆变更日志（治理权#3，2026-08-18）：谁改了什么记忆、前后什么样 */
+export interface ChangeRecord {
+  time: string
+  action: string
+  summary: string
+}
+
+export async function fetchChanges(): Promise<ChangeRecord[]> {
+  try {
+    const res = await fetch('/api/memory/changes')
+    if (!res.ok) return []
+    const data = await res.json()
+    return data.changes || []
+  } catch {
+    return []
+  }
 }
 
 export async function fetchMemory(): Promise<MemoryData> {

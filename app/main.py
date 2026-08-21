@@ -18,13 +18,17 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+from pydantic_ai import UsageLimits
 from pydantic_ai.messages import ModelMessagesTypeAdapter, ModelRequest, SystemPromptPart
 
 from app import scheduler
+from app import observability as obs
 from app.agent.delegation import ProgressTracker
 from app.agent.tutor import build_tutor_agent
+from app.council.api import router as council_router
 from app.db import sessions, wakeups
-from app.memory.store import recall_profile
+from app.routers.kb import router as kb_router
+from app.routers.panels import router as panels_router
 
 UPLOAD_DIR = Path(__file__).resolve().parent.parent / "data" / "uploads"
 
@@ -59,7 +63,33 @@ async def lifespan(_: FastAPI):
     evo_state = await restore_evolution_index()
     if not evo_state.startswith("evo: 索引正常"):
         print(f"[recovery] {evo_state}")
+    # P3 种子初始化：topics.json 无主题时写入 6 个种子（幂等；parent 留空等模型演化）
+    try:
+        from app.memory.topics_store import seed_topics
+
+        n = seed_topics()
+        if n:
+            print(f"[topics] 已初始化 {n} 个种子主题", flush=True)
+    except Exception as e:
+        print(f"[topics] 种子初始化失败（跳过）: {e}", flush=True)
     scheduler.start()
+    # 先贤会议 RAPTOR 树检索预热（2026-08-21 方案 D）：Ollama bge-m3 首次调用 ~秒级加载——
+    # 后台线程预热（不阻塞启动），首场辩论检索即就绪。Ollama 不可用时预热失败静默（检索时再降级）。
+    try:
+        import threading
+
+        def _warm_raptor():
+            try:
+                from app.memory import vector
+
+                vector.embed(["预热"])
+                print("[raptor] Ollama bge-m3 预热完成——首场辩论检索零等待", flush=True)
+            except Exception as e:
+                print(f"[raptor] 预热失败（首场辩论首次检索仍会慢）: {e}", flush=True)
+
+        threading.Thread(target=_warm_raptor, daemon=True, name="raptor-warm").start()
+    except Exception as e:
+        print(f"[raptor] 预热线程启动失败（跳过）: {e}", flush=True)
     yield
     scheduler.stop()
 
@@ -68,6 +98,13 @@ app = FastAPI(title="personal-agent 学习搭子", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"]
 )
+
+# 先贤会议（M3，2026-08-19）：/api/council/*（sages/debate/stop/distill/confirm）
+from app.council.api import router as council_router
+
+app.include_router(council_router)
+app.include_router(panels_router)
+app.include_router(kb_router)
 
 # 前端产物单一目录（#B 拆双目录 2026-08-13）：后端直接读 frontend/dist——构建产物只此一份，
 # 消除"app/static 与 dist 两版漂移"根因（旧版 static/index.html 是 8/11 残留，已 git rm）。
@@ -92,6 +129,46 @@ async def auth_middleware(request: Request, call_next):
         if auth != f"Bearer {SHIGUANG_TOKEN}":
             return JSONResponse(status_code=401, content={"detail": "unauthorized"})
     return await call_next(request)
+
+
+def tool_result_status(part) -> tuple[str, str]:
+    """工具结果可观测性判定（2026-08-18 事故补，纯函数可测）：
+    返回 (status, result)——status ∈ {"done", "error"}；result=工具返回文本摘要（≤100 字）。
+    双判定失败：①pydantic-ai 原生 outcome（抛异常/拒绝/中断）②本项目 errors.py 标准格式 "(错误|" 前缀。
+    事故背景：manage_wakeup 取消失败时模型谎报"已撤"——结果对用户可见是 harness 不变量。"""
+    content = getattr(part, "content", None)
+    if content is None:
+        content = getattr(part, "return_value", None)  # OutputToolResultEvent 兼容
+    result = str(content) if content is not None else ""
+    outcome = getattr(part, "outcome", None)
+    failed = outcome in ("failed", "denied", "interrupted") or result.startswith("(错误|")
+    return ("error" if failed else "done"), result[:100] + ("…" if len(result) > 100 else "")
+
+
+def _error_hint(msg: str) -> str:
+    """异常收尾指令（2026-08-20，借鉴 DeepTutor"4 种故障各有指令"）：
+    后端 error SSE 除了 message 还给用户可执行的下一步——错误不是终点，是引导。"""
+    if "超限" in msg or "240s" in msg:
+        return "会话超时：复杂问题可以拆成小问题逐个问；网络波动时稍等再试"
+    if "空回复" in msg:
+        return "模型没生成内容：直接说『重试』，或换个说法再问一次"
+    if "fallback" in msg:
+        return "服务暂时不稳定：稍后重试；若持续出现请检查网络"
+    return "服务暂时不可用：稍后重试；若反复出现请检查网络与 API 配置"
+
+
+# 工具结果压缩（2026-08-20，context 卫生，用户纲领"harness 做厚"）：
+# 统一硬上限兜底——防大工具结果（读文档/检索/沙箱输出）全量进上下文（context rot 来源）。
+# 与工具内部语义压缩（read_document 4000 截断/Tavily 摘要等）互补：语义压缩管"精"，这里管"底线"。
+# 不约束模型：截断后保留"…(已截断)"标记，模型知道信息不全（信息给觉察）。
+TOOL_RESULT_LIMIT = 4000
+
+
+def _compress_tool_content(content: str, limit: int = TOOL_RESULT_LIMIT) -> str:
+    """纯函数（可单测）：超限截断 + 标记；空/短内容原样返回。"""
+    if not isinstance(content, str) or len(content) <= limit:
+        return content
+    return content[:limit] + f"\n…(已截断，完整 {len(content)} 字符，可让用户提供更具体的查询缩小范围)"
 
 
 class ChatRequest(BaseModel):
@@ -185,13 +262,18 @@ def _msg_len(m) -> int:
         pn = type(p).__name__
         if pn in ("UserPromptPart", "SystemPromptPart", "TextPart"):
             total += len(getattr(p, "content", "") or "")
-        elif pn == "ThinkingPart":
-            total += len(getattr(p, "content", "") or "")
+        elif pn == "ThinkingPart":            total += len(getattr(p, "content", "") or "")
         elif pn == "ToolCallPart":
             total += len(getattr(p, "tool_name", "") or "") + 40
         elif pn == "ToolReturnPart":
             total += len(str(getattr(p, "content", "") or "")) // 2
     return total
+
+
+def _record_token_usage(sid: str, usage, model: str = ""):
+    """记录每轮 token 用量（A2-5 2026-08-20：已下沉 obs.token_usage——保留签名做兼容垫片，
+    主流程调用点已换 obs.token_usage；本垫片防外部引用断裂）。"""
+    obs.token_usage(sid, usage, model=model)
 
 
 def _apply_compaction(sid: str, history):
@@ -263,13 +345,200 @@ def _budget_hint(est: int) -> str | None:
     return None
 
 
+# ---------- A1 后台沉淀钩子（2026-08-20）----------
+# 设计：6 路纯沉淀钩子（profile/confusion/relation/continuation/teaching/topics）done 后异步跑——
+# done 立即发出（体验：不等数十秒提炼）；提炼后台跑（成本：不阻塞响应）。
+# glint 留在流内（SSE glint 事件需 done 前推前端挂金光点）。
+# 全局串行锁：防并发写 memory 文件竞态（relation/continuation 同写 state.json）+ 防 DeepSeek 429 堆积。
+_POST_HOOK_LOCK = asyncio.Semaphore(1)
+_POST_HOOK_TASKS: set = set()  # 持有引用防 GC（可观测：模块级可查）
+
+
+async def _run_post_hooks(sid: str, run_id: str, dialogue: str, need_profile: bool) -> None:
+    """done 后异步执行的收尾沉淀（A1，2026-08-20）。
+    与流内 glint 分工：glint 需 SSE 推送留流内；其余纯沉淀全后台。"""
+    async with _POST_HOOK_LOCK:
+        # profile（记忆变化门——consume 已提前到流内，这里只执行）
+        if need_profile:
+            try:
+                from app.memory.store import update_profile
+
+                rp = await update_profile()
+                obs.hook(run_id, "profile", True, rp)
+                print(f"[profile] 会话 {sid[:8]} 记忆变化 → {rp}", flush=True)
+            except Exception as e3:
+                try:
+                    from app.memory.store import log_change
+
+                    log_change("extractor_failed", "profile 画像刷新失败")
+                except Exception:
+                    pass
+                obs.hook(run_id, "profile", False, str(e3))
+                obs.error(run_id, "hook_profile", str(e3))
+                print(f"[profile] 会话 {sid[:8]} 画像刷新失败: {e3}", flush=True)
+        if not dialogue:
+            return
+        # 困惑（P0-2 方案B：每会话末必跑——"聊了困惑但没 remember"是最该提炼的场景）
+        try:
+            from app.agent.tutor import build_tutor_agent
+
+            build_tutor_agent()  # 确保提炼回调已注册（主对话已调过，这里兜底）
+            from app.memory.store import extract_session_confusion, remember
+
+            confusion = await extract_session_confusion(dialogue)
+            if confusion:
+                r = await remember(confusion, source="agent", importance=7, category="困惑")
+                obs.hook(run_id, "confusion", True, r)
+                print(f"[confusion] 会话 {sid[:8]} 提炼困惑 → {r}", flush=True)
+        except Exception as e4:
+            try:
+                from app.memory.store import log_change
+
+                log_change("extractor_failed", "confusion 提炼失败")
+            except Exception:
+                pass
+            obs.hook(run_id, "confusion", False, str(e4))
+            obs.error(run_id, "hook_confusion", str(e4))
+            print(f"[confusion] 会话 {sid[:8]} 困惑提炼失败: {e4}", flush=True)
+        # 关系轨（阶段1）：提炼"我们之间"→ 写 state.json（慢变状态）
+        try:
+            from app.memory.store import extract_session_relation
+            from app.memory.state import update_relation
+
+            rel = await extract_session_relation(dialogue)
+            if rel:
+                rr = update_relation(
+                    depth=rel.get("depth", ""),
+                    last_topic=rel.get("last_topic", ""),
+                    tone=rel.get("tone", ""),
+                    evidence=dialogue[:120],
+                )
+                obs.hook(run_id, "relation", True, rr)
+                print(f"[relation] 会话 {sid[:8]} 关系轨 → {rr}", flush=True)
+        except Exception as e5:
+            try:
+                from app.memory.store import log_change
+
+                log_change("extractor_failed", "relation 提炼失败")
+            except Exception:
+                pass
+            obs.hook(run_id, "relation", False, str(e5))
+            obs.error(run_id, "hook_relation", str(e5))
+            print(f"[relation] 会话 {sid[:8]} 关系轨提炼失败: {e5}", flush=True)
+        # 任务轨续接点（阶段2）：提炼"下次从哪继续"→ 写 state.json
+        try:
+            from app.memory.store import extract_session_continuation
+            from app.memory.state import update_continuation
+
+            cont = await extract_session_continuation(dialogue)
+            if cont:
+                cr = update_continuation(next_step=cont, evidence=dialogue[:120])
+                obs.hook(run_id, "continuation", True, cr)
+                print(f"[continuation] 会话 {sid[:8]} 续接点 → {cr}", flush=True)
+        except Exception as e6:
+            try:
+                from app.memory.store import log_change
+
+                log_change("extractor_failed", "continuation 提炼失败")
+            except Exception:
+                pass
+            obs.hook(run_id, "continuation", False, str(e6))
+            obs.error(run_id, "hook_continuation", str(e6))
+            print(f"[continuation] 会话 {sid[:8]} 续接点提炼失败: {e6}", flush=True)
+        # 教学经验（自主反思）：反思/技能不再"等用户喂"（机器触发，判断归模型）
+        try:
+            from app.memory.store import extract_session_teaching
+            from app.agent.evolution import reflect_teaching, save_skill
+
+            teaching = await extract_session_teaching(dialogue)
+            if teaching:
+                if teaching.get("reflection"):
+                    rr_ = await reflect_teaching(f"会话复盘：{teaching['reflection']}")
+                    obs.hook(run_id, "teaching", True, f"反思 {rr_}")
+                    print(f"[teaching] 会话 {sid[:8]} 反思 → {rr_}", flush=True)
+                if teaching.get("skill_method"):
+                    sk_ = await save_skill(
+                        description=teaching.get("skill_desc") or teaching.get("skill_method")[:60],
+                        method=teaching["skill_method"],
+                    )
+                    obs.hook(run_id, "teaching", True, f"技能 {sk_}")
+                    print(f"[teaching] 会话 {sid[:8]} 技能 → {sk_}", flush=True)
+        except Exception as e7:
+            try:
+                from app.memory.store import log_change
+
+                log_change("extractor_failed", "teaching 提炼失败")
+            except Exception:
+                pass
+            obs.hook(run_id, "teaching", False, str(e7))
+            obs.error(run_id, "hook_teaching", str(e7))
+            print(f"[teaching] 会话 {sid[:8]} 教学经验提炼失败: {e7}", flush=True)
+        # 主题提炼（意图驱动）：模型识别主题+归并，harness 只做意图分流 + 确定性验证
+        try:
+            from app.memory.store import extract_session_topics
+            from app.memory.topics_store import find_topic, mark_farewell, register_candidate, touch_topic
+
+            tps = await extract_session_topics(dialogue)
+            if tps and tps.get("topics"):
+                for tp in tps["topics"]:
+                    # 2026-08-20 trace 抓出：模型输出可能含非 dict 元素 → harness 过滤
+                    if not isinstance(tp, dict):
+                        continue
+                    name, intent, conf = tp["name"], tp["intent"], tp.get("confidence", "high")
+                    if intent == "learning":
+                        if find_topic(name):
+                            touch_topic(name)
+                            print(f"[topics] 会话 {sid[:8]} learning → {name}", flush=True)
+                        else:
+                            r = register_candidate(name)
+                            print(f"[topics] 会话 {sid[:8]} learning未命中→候选 {name} count={r.get('count')} created={r.get('created')}", flush=True)
+                    elif intent == "new":
+                        r = register_candidate(name)
+                        print(f"[topics] 会话 {sid[:8]} new → {name} count={r.get('count')} created={r.get('created')}", flush=True)
+                    elif intent == "farewell":
+                        if mark_farewell(name):
+                            print(f"[topics] 会话 {sid[:8]} farewell → {name}", flush=True)
+                    # mention → 完全不动（提到≠想学，防误激活，体验关键）
+                obs.hook(run_id, "topics", True, f"{len(tps['topics'])} 个主题")
+        except Exception as e8:
+            import traceback
+
+            traceback.print_exc()  # 错误详情落 stderr（配合 trace 定位）
+            try:
+                from app.memory.store import log_change
+
+                log_change("extractor_failed", "topics 提炼失败")
+            except Exception:
+                pass
+            obs.hook(run_id, "topics", False, str(e8))
+            obs.error(run_id, "hook_topics", str(e8))
+            print(f"[topics] 会话 {sid[:8]} 主题提炼失败: {e8}", flush=True)
+
+
 @app.post("/api/chat")
 async def chat(req: ChatRequest, request: Request) -> StreamingResponse:
     agent = build_tutor_agent()
     # #6 去重标志：前端手动重试带 X-Retry: 1（优先认标志，比内容匹配可靠；内容匹配仅作无标志回退）
     is_retry = request.headers.get("x-retry") == "1"
     sid = req.session_id if (req.session_id and sessions.session_exists(req.session_id)) else sessions.new_session()
+    # 运行 trace（2026-08-20）：本轮 run 唯一 id + 起点事件（完整轨迹见 app/observability.py）
+    run_id = obs.new_run_id()
+    obs.run_start(run_id, sid, req.message)
     history = _load_history(sid)
+    # B2 摘要兜底（2026-08-20）：链全丢（异常/清空）但摘要存在时——用摘要构建最小历史，
+    # 保证压缩前的早期上下文不丢（摘要=早期信息的唯一载体）；有摘要=会话延续，不清 current
+    if not history:
+        summary = sessions.get_summary(sid)
+        if summary and len(summary) >= 30:
+            history = [
+                ModelRequest(
+                    parts=[
+                        SystemPromptPart(
+                            content=f"（以下是与你的更早对话摘要，继续本轮：）\n{summary}\n\n（摘要可能不完整，涉及早期细节拿不准时可以直接问用户）"
+                        )
+                    ]
+                )
+            ]
     if not history:
         # 新会话第一轮：清空 current（防跨会话残留——上次的状态不该冒充本次的），last_session 保留
         from app.memory.state import clear_current
@@ -287,14 +556,54 @@ async def chat(req: ChatRequest, request: Request) -> StreamingResponse:
         user_text = hint + user_text
 
     async def gen() -> AsyncIterator[str]:
+        # B1 消息级持久化（2026-08-20，行业标准：用户输入无条件先落库，不依赖流完成）：
+        # 壳层 = 前置落用户消息 + try/finally 兜底（断流/异常/正常都执行 _finalize，同步函数不被打断）
+        state = {"messages": [], "error_msg": [""], "t0": time.monotonic()}
+        task_run_id = uuid.uuid4().hex[:10]
+        tracker = ProgressTracker(task_run_id)
+        try:
+            sessions.save_user_message(sid, user_text)
+        except Exception as e:
+            print(f"[chat-save-user] 会话 {sid[:8]} 用户消息落库失败: {e}", flush=True)
+        yield _sse({"type": "run", "run_id": task_run_id})
+
+        def _finalize() -> None:
+            """finally 兜底（同步——CancelledError 只注入 await 点，同步段可靠执行）：
+            落 assistant 链（断流也留底）+ 运行 trace 收尾。"""
+            try:
+                messages_json = (
+                    ModelMessagesTypeAdapter.dump_json(state["messages"]).decode()
+                    if state["messages"]
+                    else ""
+                )
+                sessions.save_assistant_message(sid, user_text, messages_json, is_retry=is_retry)
+            except Exception as e2:
+                print(f"[chat-save-error] 会话 {sid[:8]} 落库失败: {e2}", flush=True)
+            obs.run_end(
+                run_id,
+                "error" if state["error_msg"][0] else "ok",
+                int((time.monotonic() - state["t0"]) * 1000),
+                state["error_msg"][0] or "",
+            )
+
+        try:
+            async for ev in _chat_stream(state, request, tracker):
+                yield ev
+        except asyncio.CancelledError:
+            # 断流（GeneratorExit/ClientDisconnect 隐式取消）：兜底落库后重抛
+            _finalize()
+            raise
+        except Exception:
+            _finalize()
+            raise
+        else:
+            _finalize()
+
+    async def _chat_stream(state: dict, request: Request, tracker: ProgressTracker) -> AsyncIterator[str]:
         full_text = ""
-        # M7：每个 run 一个 run_id + 进度 tracker（deps 注入，进度卡唯一通道）
-        run_id = uuid.uuid4().hex[:10]
-        tracker = ProgressTracker(run_id)
-        yield _sse({"type": "run", "run_id": run_id})
         turn_started = False
         error_msg = ""
-        messages = []
+        messages = state["messages"]
         # #2 fallback 链（P0）：主模型 → 备用模型（错误分类/空 content 触发；熔断冷却期只试主）
         from app.agent.model import (
             get_fallback_model,
@@ -312,12 +621,14 @@ async def chat(req: ChatRequest, request: Request) -> StreamingResponse:
         # #6 整轮流总护栏（真 240s）：asyncio.timeout 包【每次尝试】，预算 = 240 - 已消耗——
         # 主吃满 180s 超时后，备用只剩 60s 预算 → 用户最坏等 240s，不是 360s（尝试前检查兑现不了这个数）
         TOTAL_BUDGET = 240
-        t0 = time.monotonic()
+        t0 = state["t0"]
         for i, m in enumerate(attempts):
             tag = "primary" if i == 0 else "fallback"
+            obs.llm_start(run_id, tag, str(m))
             remaining = TOTAL_BUDGET - (time.monotonic() - t0)
             if remaining <= 0:
                 error_msg = "请求总时长超限（240s）"
+                obs.error(run_id, "budget", error_msg)
                 print(f"[chat-timeout] 会话 {sid[:8]} 总预算耗尽（{tag} 未尝试）", flush=True)
                 messages = []
                 break
@@ -330,8 +641,19 @@ async def chat(req: ChatRequest, request: Request) -> StreamingResponse:
                     async with agent.run_stream_events(
                         user_text, message_history=history, deps={"progress": tracker},
                         model=m, model_settings={"timeout": MODEL_TIMEOUT_SECONDS},
+                        # 轮次预算（2026-08-19，借鉴 DeepTutor 探索 8+settle 3=12 轮上界）：
+                        # request_limit=模型请求轮次上限（每轮工具调用一次），防无限调工具空转；
+                        # total_tokens_limit=整 run 累计 token 兜底（输入+输出+工具循环多轮累加）。
+                        # ⚠️ 修正 2026-08-19：原 30000 拍低了——带工具循环的长对话累计即超
+                        #（实测 30684 误伤"继续讲因果推断"正常对话，run 中断收尾钩子都没跑）。
+                        # 按窗口比例：DeepSeek 128K × 70% ≈ 90000（留 30% 给模型输出余量）
+                        usage_limits=UsageLimits(request_limit=8, total_tokens_limit=90000),
                     ) as stream:
                         async for ev in stream:
+                            # B1 is_disconnected 检查（2026-08-20 行业标准）：客户端断开即停生成——
+                            # 省"用户关页面还在烧 LLM 费"；raise CancelledError → gen 壳 _finalize 兜底落库
+                            if await request.is_disconnected():
+                                raise asyncio.CancelledError
                             # 注意：事件没有 .type 属性，用类名分发（字段是 event_kind）
                             et = type(ev).__name__
                             if et == "PartEndEvent":
@@ -344,6 +666,7 @@ async def chat(req: ChatRequest, request: Request) -> StreamingResponse:
                                         yield _sse({"type": "turn_start"})
                                         turn_started = True
                                     args = str(getattr(part, "args", "") or "")[:80]
+                                    obs.tool_start(run_id, tool_name, args, getattr(part, "tool_call_id", None))
                                     yield _sse({
                                         "type": "tool",
                                         "name": tool_name,
@@ -356,11 +679,21 @@ async def chat(req: ChatRequest, request: Request) -> StreamingResponse:
                                 part = getattr(ev, "part", None)
                                 tool_name = getattr(part, "tool_name", None)
                                 if tool_name:
+                                    # 工具结果压缩（2026-08-20）：统一硬上限——改 part.content 影响
+                                    # all_messages 里保存的内容（下一轮上下文），前端展示走 tool_result_status 不受影响
+                                    pc = getattr(part, "content", None)
+                                    if isinstance(pc, str):
+                                        setattr(part, "content", _compress_tool_content(pc))
+                                    # 可观测性（2026-08-18 事故补）：done 必须带结果与失败标记——
+                                    # 工具返回失败时模型可能吞掉（谎报成功），harness 不变量：结果对用户可见
+                                    status, result = tool_result_status(part)
+                                    obs.tool_end(run_id, tool_name, status, getattr(part, "tool_call_id", None), result)
                                     yield _sse({
                                         "type": "tool",
                                         "name": tool_name,
-                                        "status": "done",
+                                        "status": status,
                                         "id": getattr(part, "tool_call_id", None),
+                                        "result": result,
                                     })
                             elif et == "PartDeltaEvent":
                                 d = ev.delta
@@ -379,59 +712,86 @@ async def chat(req: ChatRequest, request: Request) -> StreamingResponse:
                 msgs = stream.all_messages()
                 if full_text or used_tool:
                     # 成功（有文本或有工具调用）——注意：有工具调用的 run 不重试（规避副作用重复，用户拍板 A）
+                    # token 用量记录（A2-5 2026-08-20：逻辑下沉 obs.token_usage，主流程/子任务同一台账）
+                    try:
+                        obs.token_usage(sid, stream.usage(), model=m)
+                    except Exception:
+                        pass
                     messages = msgs
+                    state["messages"] = msgs  # B1 引用同步（_finalize 读 state——548 行重新赋值会断引用）
                     circuit_record(True)
                     break
                 # 空 content（166 轮 0 字场景的正主）：无文本且无工具调用 → 确定性判定（有没有字/有没有调工具）
                 if i < len(attempts) - 1:
+                    obs.error(run_id, "empty", f"{tag} 空content(0字无工具) → fallback")
                     print(f"[fallback] 会话 {sid[:8]} {tag} 空content(0字无工具) → fallback", flush=True)
                     circuit_record(False)
                     continue
                 error_msg = "模型返回空回复（已重试）"
+                obs.error(run_id, "empty", error_msg)
                 circuit_record(False)
                 break
             except asyncio.TimeoutError:
                 # #6 整轮流超时（asyncio.timeout 总护栏 240s 触发）——剩余预算耗尽，直接 error，不再重试
                 error_msg = "请求总时长超限（240s）"
+                obs.error(run_id, "timeout", f"{tag} 触发总护栏 240s")
                 print(f"[chat-timeout] 会话 {sid[:8]} {tag} 触发总护栏 240s", flush=True)
                 circuit_record(False)
                 messages = []
                 break
             except Exception as e:
                 if i < len(attempts) - 1 and should_fallback(e):
+                    obs.error(run_id, "llm_fallback", f"{tag} 异常→fallback: {str(e)[:120]}")
                     print(f"[fallback] 会话 {sid[:8]} {tag} 异常→fallback: {str(e)[:120]}", flush=True)
                     circuit_record(False)
                     continue
                 # #4 异常路径：API 失败/超时/断流 → 用户消息必须落库（否则消息丢失）+ 前端收到 error 事件
                 error_msg = str(e)[:200]
+                obs.error(run_id, "llm", error_msg)
                 print(f"[chat-error] 会话 {sid[:8]} {tag} 异常: {error_msg}", flush=True)
                 circuit_record(False)
                 messages = []
                 break
         if error_msg:
-            yield _sse({"type": "error", "message": error_msg})  # 前端显示错误而非干等
-        # 持久化：完整对话链（供下次重放）+ 用户消息（异常时也要落用户消息，避免丢消息）
-        try:
-            messages_json = ModelMessagesTypeAdapter.dump_json(messages).decode() if messages else ""
-            sessions.save_run(sid, user_text, messages_json, is_retry=is_retry)
-        except Exception as e2:
-            print(f"[chat-save-error] 会话 {sid[:8]} 落库失败: {e2}", flush=True)
+            state["error_msg"][0] = error_msg
+            yield _sse({"type": "error", "message": error_msg, "hint": _error_hint(error_msg)})  # 前端显示错误+下一步建议而非干等
+        # B1 持久化移至 gen 壳的 _finalize（finally 兜底：断流/异常/正常都执行）——此处不再落库
         # 状态轮：会话结束快照 current → last_session（跨会话接续地基）
         from app.memory.state import snapshot_to_last_session
 
         snapshot_to_last_session()
-        # D1 事件兜底（v0.2）：本请求轮末若有记忆变化 → 机器触发画像重提炼（触发归机器，提炼归模型）
-        # 口径：turn-end 粒度（每轮 POST 末尾）——单用户频率低、画像更及时；频率受 remember 去重天然制约
-        from app.memory.store import consume_memory_changed, update_profile
+        # A1（2026-08-20）：沉淀钩子 done 后异步——done 立即发出（体验：不等数十秒提炼），
+        # 提炼后台跑（成本：不阻塞响应；串行防并发写 memory 文件竞态）。
+        # 流内只保留：状态轮快照（上）+ 闪光提炼（SSE glint 事件需 done 前推送）。
+        # 口径：profile 仍挂记忆变化门（consume 提前消费，值传后台任务）；
+        # 其余五路（困惑/关系/续接点/教学/主题）每会话末必跑（不挂门——聊了困惑但没 remember 是最该提炼的场景）。
+        from app.memory.store import consume_memory_changed
 
-        if consume_memory_changed():
+        need_profile = consume_memory_changed()
+        dialogue = _history_to_text(messages[-8:]) if messages else ""
+        if dialogue:
+            # 闪光提炼（2026-08-20，拾光=拾到我们没发现的闪光）：提炼"用户没发现的自己"→
+            # SSE glint 事件（done 前推前端，给最后一条 assistant 消息挂金光点）+ 写 cat=闪光
+            # 与困惑同构：提炼归模型三判据，无闪光 None（零成本）；闪光≠夸奖≠困惑
             try:
-                rp = await update_profile()
-                print(f"[profile] 会话 {sid[:8]} 记忆变化 → {rp}", flush=True)
-            except Exception as e3:
-                print(f"[profile] 会话 {sid[:8]} 画像刷新失败: {e3}", flush=True)
+                from app.memory.store import extract_session_glint, remember
+
+                glint = await extract_session_glint(dialogue)
+                if glint:
+                    yield _sse({"type": "glint", "text": glint})
+                    gr = await remember(glint, source="agent", importance=7, category="闪光")
+                    obs.hook(run_id, "glint", True, gr)
+                    print(f"[glint] 会话 {sid[:8]} 拾到闪光 → {gr}", flush=True)
+            except Exception as e4b:
+                obs.hook(run_id, "glint", False, str(e4b))
+                print(f"[glint] 会话 {sid[:8]} 闪光提炼失败: {e4b}", flush=True)
         if turn_started:
             yield _sse({"type": "turn_end"})
+        # A1：沉淀钩子后台化（done 立即发出；任务持有引用防 GC，串行锁防并发写）
+        task = asyncio.create_task(_run_post_hooks(sid, run_id, dialogue, need_profile))
+        _POST_HOOK_TASKS.add(task)
+        task.add_done_callback(_POST_HOOK_TASKS.discard)
+
         yield _sse({"type": "done", "session_id": sid})
 
     return StreamingResponse(gen(), media_type="text/event-stream")
@@ -448,221 +808,6 @@ def index():
     except Exception:
         pass
     return resp
-
-
-@app.get("/api/memory")
-def get_memory():
-    from app.agent.evolution import list_reflections, list_skills
-    from app.memory.store import read_entries
-
-    return {
-        "profile": recall_profile(),
-        "entries": [
-            {
-                "content": e.content,
-                "category": e.category,
-                "importance": e.importance,
-                "date": e.created_at,
-                "source": e.source,
-            }
-            for e in read_entries()
-        ],
-        "reflections": list_reflections(),
-        "skills": list_skills(),
-    }
-
-
-class MemoryEditRequest(BaseModel):
-    old: str
-    new: str
-
-
-class MemoryDeleteRequest(BaseModel):
-    content: str
-
-
-@app.post("/api/memory/edit")
-async def memory_edit(req: MemoryEditRequest):
-    from app.memory.store import edit_memory
-
-    return {"ok": True, "msg": await edit_memory(req.old, req.new)}
-
-
-@app.post("/api/memory/delete")
-def memory_delete(req: MemoryDeleteRequest):
-    from app.memory.store import forget
-
-    return {"ok": True, "msg": forget(req.content)}
-
-
-class EvolutionDeleteRequest(BaseModel):
-    kind: str  # reflection | skill
-    content: str
-
-
-@app.post("/api/evolution/delete")
-def evolution_delete(req: EvolutionDeleteRequest):
-    """M5 人可删：删除反思/技能条目（文件 + 向量）"""
-    from app.agent.evolution import delete_item
-
-    return {"ok": True, "msg": delete_item(req.kind, req.content)}
-
-
-@app.get("/api/sessions")
-def sessions_list():
-    """历史会话列表（B，DeepSeek 式）：标题 + 时间 + 消息数"""
-    from app.db.sessions import list_sessions
-
-    return {"sessions": list_sessions()}
-
-
-@app.post("/api/session/new")
-def session_new():
-    """新建会话：返回新 session_id（前端切到新会话）"""
-    from app.db.sessions import new_session
-
-    return {"session_id": new_session()}
-
-
-@app.get("/api/session/{sid}")
-def get_session(sid: str):
-    """恢复会话：把持久化的对话链转成前端格式返回（刷新后恢复消息列表）"""
-    from app.db.sessions import load_messages_json
-    from pydantic_ai.messages import ModelMessagesTypeAdapter
-
-    raw = load_messages_json(sid)
-    if not raw:
-        return {"messages": []}
-    try:
-        msgs = ModelMessagesTypeAdapter.validate_json(raw)
-    except Exception as e:
-        return {"messages": [], "error": str(e)}
-    out = []
-    for m in msgs:
-        parts = getattr(m, "parts", []) or []
-        content, thinking = "", ""
-        tool_calls = []
-        is_user = any(getattr(p, "part_kind", "") == "user-prompt" for p in parts)
-        for p in parts:
-            kind = getattr(p, "part_kind", "")
-            if kind == "user-prompt":
-                content += getattr(p, "content", "")
-            elif kind == "text":
-                content += getattr(p, "content", "")
-            elif kind == "thinking":
-                thinking += getattr(p, "content", "")
-            elif kind == "tool-call":
-                args = str(getattr(p, "args", "") or "")[:80]
-                tool_calls.append(
-                    {
-                        "id": getattr(p, "tool_call_id", None),
-                        "name": getattr(p, "tool_name", ""),
-                        "status": "done",
-                        "args": args or None,
-                    }
-                )
-        # 跳过 system-prompt / tool-return 专用消息（无用户内容也无模型内容）
-        if not content and not thinking and not tool_calls and not is_user:
-            continue
-        out.append(
-            {
-                "role": "user" if is_user else "assistant",
-                "content": content or ("(调用了工具)" if tool_calls else ""),
-                "thinking": thinking,
-                "toolCalls": tool_calls,
-                "done": True,
-            }
-        )
-    return {"messages": out}
-
-
-@app.get("/api/kb/reindex")
-def kb_reindex_api():
-    """手动重建知识库索引（源文件权威；删库/索引损坏/检索引空时用）"""
-    from app.tools.kb import kb_reindex
-
-    return {"ok": True, "msg": kb_reindex()}
-
-
-@app.get("/api/progress")
-def get_progress():
-    """学习进度（可视化左栏）：从记忆条目推导客观事实；无数据则诚实空态
-    - 主题节点：goal/进度/学习记录 类条目
-    - streak：需要每日学习日志（M6 接入），当前无则不虚构
-    """
-    from app.memory.store import read_entries
-
-    entries = read_entries()
-    goal_cats = {"goal", "目标", "progress", "进度", "learning", "学习记录"}
-    topics = []
-    for e in entries:
-        if e.category in goal_cats and e.content.strip():
-            title = e.content.strip()
-            topics.append(
-                {
-                    "title": title[:40] + ("…" if len(title) > 40 else ""),
-                    "status": "active",
-                    "date": e.created_at,
-                }
-            )
-    # streak：连续学习天数来自 daily_activity（M6 学习日志真数据，不虚构）
-    return {
-        "topics": topics[:6],
-        "streak": wakeups.streak_days(),
-        "hasLearningLog": wakeups.has_learning_log(),
-        "memoryCount": len(entries),
-        "recentActivity": [
-            {"date": a["date"], "topics": json.loads(a.get("topics") or "[]")}
-            for a in wakeups.recent_activity(7)
-        ],
-    }
-
-
-# ---------- M6 通知 API（前端轮询投递）----------
-
-@app.get("/api/notifications")
-def get_notifications():
-    return {"notifications": wakeups.notifications(20)}
-
-
-# ---------- M7 多 agent 任务进度（前端进度卡轮询）----------
-
-@app.get("/api/tasks/{run_id}")
-async def get_task_progress(run_id: str):
-    snap = await ProgressTracker(run_id).snapshot()
-    return {"run_id": run_id, "progress": snap}
-
-
-# ---------- M8 进化层反馈（前端 👎/👍 按钮 → 反思/技能）----------
-
-class FeedbackRequest(BaseModel):
-    rating: int  # -1=不满意（触发反思）, 1=满意（提示可存技能）
-    message: str  # 用户当时说的话
-    response: str | None = None  # 模型的回复（上下文）
-
-
-@app.post("/api/feedback")
-async def feedback(req: FeedbackRequest):
-    """响应显式用户动作：👎 → 触发反思入库；👍 → 返回提示信息（由模型自主决定是否存技能）"""
-    from app.agent.evolution import reflect_teaching
-
-    if req.rating < 0:
-        ctx = f"用户说：{req.message}"
-        if req.response:
-            ctx += f"\n我当时的讲解：{req.response[:500]}"
-        result = await reflect_teaching(ctx)
-        return {"ok": True, "handled": "reflection", "msg": result}
-    return {"ok": True, "handled": "ack", "msg": "已收到 👍，觉得这套讲法好可以直接告诉我存进技能库"}
-
-
-class NotificationReadRequest(BaseModel):
-    id: int
-
-
-@app.post("/api/notifications/read")
-def notification_read(req: NotificationReadRequest):
-    wakeups.mark_read(req.id)
-    return {"ok": True}
 
 
 if __name__ == "__main__":

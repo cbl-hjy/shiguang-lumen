@@ -8,9 +8,11 @@ MAX_RESULTS = 8
 
 def web_search(query: str, max_results: int = 5) -> str:
     """联网搜索最新信息：查资料、验证事实、找最新进展时用。返回标题+链接+摘要。"""
+    from app.tools.errors import arg_error, net_error
+
     q = query.strip()
     if not q:
-        return "(搜索内容为空)"
+        return arg_error("搜索", "搜索内容为空")
     try:
         r = requests.post(
             "https://api.tavily.com/search",
@@ -22,9 +24,9 @@ def web_search(query: str, max_results: int = 5) -> str:
             timeout=20,
         )
     except Exception as e:
-        return f"(搜索失败: {e})"
+        return net_error("搜索", str(e))
     if r.status_code != 200:
-        return f"(搜索失败: HTTP {r.status_code})"
+        return net_error("搜索", f"HTTP {r.status_code}")
     results = r.json().get("results", [])
     if not results:
         return "(没有搜到结果，可换个说法再试)"

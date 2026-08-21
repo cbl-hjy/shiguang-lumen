@@ -23,7 +23,7 @@ export default function MermaidRenderer({ code }: { code: string }) {
             lineColor: '#4d5b63',
             fontFamily: '"LXGW WenKai", "JetBrains Mono", monospace',
           },
-          securityLevel: 'loose',
+          securityLevel: 'strict',  // B12 加固（2026-08-20：loose 允许 HTML 注入=XSS 面；strict 禁 HTML，流程图兼容）
         })
         const id = `mermaid-${Math.random().toString(36).slice(2, 9)}`
         const { svg } = await mermaid.render(id, code)
@@ -49,7 +49,7 @@ export default function MermaidRenderer({ code }: { code: string }) {
     return (
       <pre className="mb-2 p-3 rounded-lg bg-[#0d0f13] border border-hairline overflow-x-auto font-mono text-[13px] leading-[1.6]">
         <code>{code}</code>
-        <div className="mt-2 text-[11px] text-[rgba(236,233,225,0.35)]">
+        <div className="mt-2 text-[11px] text-ink-dim/80">
           (图渲染失败{errMsg ? `：${errMsg.slice(0, 60)}` : ''}，已显示原始文本)
         </div>
       </pre>
@@ -60,7 +60,7 @@ export default function MermaidRenderer({ code }: { code: string }) {
     <div className="mb-2 rounded-lg bg-[#14171c] border border-hairline p-3 overflow-x-auto">
       <div ref={ref} className="mermaid-graph flex justify-center" />
       {state === 'loading' && (
-        <div className="text-[12px] text-[rgba(236,233,225,0.4)] text-center py-4">绘制图中…</div>
+        <div className="text-[12px] text-ink-dim text-center py-4">绘制图中…</div>
       )}
     </div>
   )

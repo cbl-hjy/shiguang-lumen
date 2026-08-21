@@ -1,13 +1,31 @@
+# Python
 .venv/
 __pycache__/
 *.pyc
+.pytest_cache/
+
+# 环境与密钥（绝不入库）
 .env
+
+# 运行时数据
 *.log
 data/
-research/pi-mono/
 data-experiment/
+data-test-tmp/
+
+# 前端构建
 frontend/.cache/
 frontend/dist/
-data-experiment/
-frontend/.cache/
-frontend/dist/
+frontend/node_modules/
+
+# 隐私红线（2026-08-21）：用户记忆 / 开发过程文件 / 评测数据 / 备份——绝不入库
+memory/
+.workbuddy/
+reports/
+docs/
+logs/
+research/
+backup-*.bundle
+budget_test/
+GOALS.md
+PROGRESS.md

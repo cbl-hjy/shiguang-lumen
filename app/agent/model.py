@@ -15,6 +15,7 @@ import time
 
 from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.providers.openai import OpenAIProvider
+from pydantic_ai.settings import ModelSettings
 
 from app.config import (
     DEEPSEEK_API_KEY,
@@ -41,10 +42,14 @@ MODEL_TIMEOUT_SECONDS = 180
 
 
 def get_model() -> OpenAIChatModel:
-    """主模型（唯一构建点——4 处重复构建收敛到这里）"""
+    """主模型（唯一构建点——4 处重复构建收敛到这里）。
+    2026-08-20 缺陷 A 修复（harness 天下大同）：settings 带默认超时——所有 Agent(get_model())
+    的 agent.run 自动继承单次调用 180s 超时（council 星宿/钩子提炼/delegation 子 agent/evolution
+    反思技能 10 处裸 run 全部获得护栏，零调用点改动）。run 级 model_settings 合并时优先（main.py 同值无冲突）。"""
     return OpenAIChatModel(
         PIN_MODEL,
         provider=OpenAIProvider(base_url=DEEPSEEK_BASE_URL, api_key=DEEPSEEK_API_KEY),
+        settings=ModelSettings(timeout=MODEL_TIMEOUT_SECONDS),
     )
 
 
@@ -78,6 +83,10 @@ def circuit_record(ok: bool):
 def should_fallback(exc: Exception) -> bool:
     """错误分类：True=换备用重试，False=请求本身问题不重试。
     基于 str(exc) 提取 status_code（ModelHTTPError 无独立字段，格式稳定：status_code: NNN）"""
+    # asyncio.TimeoutError 的 str() 是空字符串（Python 3.11+ 即 builtins.TimeoutError）——
+    # 字符串匹配识别不了，必须按类型识别（2026-08-21 培根建树事故：120s 超时被误判为不可重试）
+    if isinstance(exc, TimeoutError):
+        return True
     msg = str(exc)
     m = re.search(r"status_code[: ]+(\d{3})", msg)
     code = m.group(1) if m else ""

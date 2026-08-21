@@ -1,9 +1,9 @@
-/* 拾光 Lumen · 设计 token v2（2026-08-11 打磨：字体同族 + 夜色微光 + 台灯暖感）
-   概念：黑底=夜，teal=光——"夜色里的一盏灯"
-   - 字体同族：字标站酷小薇（Logo 动态加载）· 正文霞鹜文楷 · 数字/代码 JetBrains Mono
-   - 文字微暖：#ece9e1（台灯/纸张的暖，非冷白）
-   - 夜色微光：左上角光源渐变 + 光束斜射 + 强调元素克制辉光（光=状态，非表演）
-   字体延迟策略：文楷全量 woff2 8.8MB（fontsource 无中文子集分块），font-display: swap 本地加载；首屏卡再子集化 */
+/* 拾光 Lumen · 设计 token v3（2026-08-20 重构定稿，docs/FRONTEND-DESIGN-SYSTEM.md）
+   概念：黑底=夜，teal=光——"夜色里的一盏灯"升级为"夜空中拾光"：
+   - 光点系统：一粒光 = 一个状态 / 一次拾取 / 一位星宿
+   - 光轨：主题沿时间轴排布（时光机语义，休眠只藏不删）
+   - 光色语义：青=进行 / 琥珀=需注意(非红=不焦虑) / 白=完成 / 暗=休眠
+   字体同族：字标站酷小薇（Logo 动态加载）· 正文霞鹜文楷 · 数字/代码 JetBrains Mono */
 @import '@fontsource/lxgw-wenkai/index.css';
 @import '@fontsource/lxgw-wenkai/500.css';
 @import '@fontsource/jetbrains-mono/400.css';
@@ -11,18 +11,33 @@
 @import 'tailwindcss';
 
 @theme {
+  /* 夜（背景层级，深灰非纯黑） */
   --color-bg: #14161b;
   --color-surface: #1c1f25;
   --color-elevated: #232730;
+  /* 光（文字，暖米白非纯白，台灯暖感） */
+  --color-ink: #ece9e1;
+  --color-ink-muted: rgba(236, 233, 225, 0.65);
+  --color-ink-dim: rgba(236, 233, 225, 0.42);
+  /* 语义色（低饱和，鲜艳只给关键操作/状态） */
   --color-primary: #3ec9b0;
   --color-primary-ink: #0b1512;
+  --color-amber: #e6be78; /* 拾光金（新增）：闪光/下一步/待审/卡住专用——"拾到"时刻 */
   --color-success: #4cb782;
   --color-warning: #f2994a;
   --color-error: #eb5757;
   --color-hairline: rgba(236, 233, 225, 0.08);
-  --color-ink: #ece9e1;
-  --color-ink-muted: rgba(236, 233, 225, 0.65);
-  --color-ink-dim: rgba(236, 233, 225, 0.42);
+  /* 字阶（8/9px 全删 · 消息正文最大 14px · 11px micro 封顶） */
+  --text-micro: 11px;
+  --text-sm: 12px;
+  --text-base: 13px;
+  --text-md: 14px;
+  --text-lg: 15px;
+  /* 圆角（6 输入 / 10 卡片 / 14 弹窗） */
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  /* 字体 */
   --font-logo: 'ZCOOL XiaoWei', 'Songti SC', 'SimSun', serif;
   --font-sans: 'LXGW WenKai', 'Noto Sans SC', 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif;
   --font-mono: 'JetBrains Mono', ui-monospace, 'Cascadia Code', Consolas, monospace;
@@ -86,6 +101,66 @@ body {
 }
 .glow-primary-strong {
   box-shadow: 0 0 26px rgba(62, 201, 176, 0.35);
+}
+.glow-amber {
+  box-shadow: 0 0 14px rgba(230, 190, 120, 0.28);
+}
+
+/* ===== 光点系统（Lumen Dots）v3：一粒光 = 一个状态/一次拾取/一位星宿 ===== */
+/* 状态光点：青=进行/琥珀=需注意/白=完成/暗=休眠（hover 显示文字补偿） */
+.lumen-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 9999px;
+  flex-shrink: 0;
+}
+.lumen-dot-active {
+  background: var(--color-primary);
+  box-shadow: 0 0 8px rgba(62, 201, 176, 0.55);
+}
+.lumen-dot-attention {
+  background: var(--color-amber);
+  box-shadow: 0 0 8px rgba(230, 190, 120, 0.5);
+}
+.lumen-dot-done {
+  background: var(--color-ink);
+  box-shadow: 0 0 6px rgba(236, 233, 225, 0.35);
+}
+.lumen-dot-dormant {
+  background: #4a525a;
+}
+
+/* 光点点亮动画（L1 状态变化：光晕扩散 400ms——"拾起"动作感） */
+@keyframes dot-ignite {
+  0% {
+    transform: scale(0.4);
+    box-shadow: 0 0 0 rgba(62, 201, 176, 0);
+  }
+  60% {
+    transform: scale(1.15);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+.lumen-dot-ignite {
+  animation: dot-ignite 0.4s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+/* 光轨（Time Trail）：主题时间轴的虚线轨迹 + 暗星（休眠不删） */
+.lumen-trail {
+  height: 1px;
+  background: repeating-linear-gradient(90deg, rgba(62, 201, 176, 0.28) 0 4px, transparent 4px 8px);
+}
+
+/* ===== 动效 token（L0-L3 分层，尊重 prefers-reduced-motion） ===== */
+:root {
+  --motion-fast: 150ms; /* L0 即时 */
+  --motion-point: 400ms; /* L1 点亮 */
+  --motion-flow: 300ms; /* L2 内容流 */
+  --motion-ritual: 900ms; /* L3 仪式 */
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 /* 消息进场：fadeIn + 上移 4px（0.3s，reduced-motion 降级） */

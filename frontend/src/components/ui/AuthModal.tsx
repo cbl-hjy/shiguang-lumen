@@ -1,4 +1,4 @@
-/* 连接令牌设置入口（P0 门锁）：设置按钮手动打开 / 401 自动弹出。
+/* 接光令牌调光入口（P0 门锁）：调光按钮手动打开 / 401 自动弹出。
    手机局域网访问时输入一次（localStorage 持久），保存后刷新使所有请求带 token。 */
 import { useEffect, useState } from 'react'
 import { getToken, setToken, AUTH_REQUIRED_EVENT } from '../../api/auth'
@@ -31,9 +31,9 @@ export default function AuthModal({ open, onOpenChange }: Props) {
       <div className="relative bg-bg border border-hairline rounded-xl p-5 w-80 shadow-2xl animate-msg-in">
         <div className="flex items-center gap-2 mb-1">
           <Icon name="wrench" size={14} />
-          <h2 className="text-sm font-semibold text-primary">连接令牌</h2>
+          <h2 className="text-sm font-semibold text-primary">接光令牌</h2>
         </div>
-        <p className="text-[12px] text-[rgba(236,233,225,0.55)] mb-3">
+        <p className="text-[12px] text-ink-dim mb-3">
           服务开启鉴权后需输入令牌（后端 .env 的 SHIGUANG_TOKEN），保存在本浏览器，下次免输。
         </p>
         <input
@@ -46,7 +46,7 @@ export default function AuthModal({ open, onOpenChange }: Props) {
         <div className="flex gap-2 justify-end">
           <button
             onClick={() => onOpenChange(false)}
-            className="px-3 py-1.5 rounded-lg text-sm text-[rgba(236,233,225,0.6)] hover:text-primary"
+            className="px-3 py-1.5 rounded-lg text-sm text-ink-muted hover:text-primary"
           >
             取消
           </button>

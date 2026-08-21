@@ -8,6 +8,7 @@ import ThinkingBlock from './ThinkingBlock'
 import ToolCallCard from './ToolCallCard'
 import MermaidRenderer from './MermaidRenderer'
 import Icon from '../ui/Icon'
+import DebateMessage from '../council/DebateMessage'
 
 function Cursor() {
   /* 流式光点：teal 发光圆点（样式在 tokens.css .animate-cursor，"光在打字"） */
@@ -16,7 +17,7 @@ function Cursor() {
 
 function CopyToast() {
   return (
-    <span className="fixed bottom-20 right-6 z-50 flex items-center gap-2 rounded-lg bg-elevated border border-hairline px-3 py-2 text-[12px] text-[rgba(236,233,225,0.85)] shadow-2xl animate-toast-in">
+    <span className="fixed bottom-20 right-6 z-50 flex items-center gap-2 rounded-lg bg-elevated border border-hairline px-3 py-2 text-[12px] text-ink/90 shadow-2xl animate-toast-in">
       <span className="empty-light" />
       已复制
     </span>
@@ -40,7 +41,7 @@ const mdComponents = {
   li: (props: ComponentPropsWithoutRef<'li'>) => <li className="leading-[1.7]" {...props} />,
   code: (props: ComponentPropsWithoutRef<'code'>) => (
     <code
-      className="font-mono text-[13px] bg-elevated border border-hairline rounded px-1 py-0.5 text-[rgba(62,201,176,0.95)]"
+      className="font-mono text-[13px] bg-elevated border border-hairline rounded px-1 py-0.5 text-primary"
       {...props}
     />
   ),
@@ -74,7 +75,7 @@ const mdComponents = {
   },
   blockquote: (props: ComponentPropsWithoutRef<'blockquote'>) => (
     <blockquote
-      className="mb-2 pl-3 border-l-2 border-primary/50 text-[rgba(236,233,225,0.7)]"
+      className="mb-2 pl-3 border-l-2 border-primary/50 text-ink-muted"
       {...props}
     />
   ),
@@ -113,6 +114,17 @@ export default function MessageBubble({ msg }: { msg: ChatMessage }) {
   const [feedbackBusy, setFeedbackBusy] = useState(false)
   const retry = useChatStore((s) => s.retry)
 
+  /* 问星（M3）：role='debate' 的辩论事件消息走专用渲染（与普通消息同流） */
+  if (msg.role === 'debate') {
+    return (
+      <div className="flex justify-start mb-4 animate-msg-in">
+        <div className="max-w-[92%] w-full">
+          <DebateMessage ev={msg.debateEvent!} msgId={msg.id} />
+        </div>
+      </div>
+    )
+  }
+
   const copy = async () => {
     try {
       await navigator.clipboard.writeText(msg.content)
@@ -142,7 +154,7 @@ export default function MessageBubble({ msg }: { msg: ChatMessage }) {
         className={`relative max-w-[85%] rounded-xl px-4 py-3 text-[14px] leading-[1.7] ${
           isUser
             ? 'bg-elevated text-[rgba(236,233,225,0.95)]'
-            : 'bg-surface text-[rgba(236,233,225,0.92)] msg-glow-strip'
+            : 'bg-surface text-ink msg-glow-strip'
         }`}
       >
         {!isUser && <ThinkingBlock text={msg.thinking} />}
@@ -157,10 +169,21 @@ export default function MessageBubble({ msg }: { msg: ChatMessage }) {
           {isUser ? msg.content : <MarkdownBody content={msg.content} />}
           {!msg.done ? <Cursor /> : !isUser && msg.content ? <span className="done-dot" aria-hidden /> : null}
         </div>
-        {/* #6 失败提示 + 手动重试（backend=已落库；timeout/interrupted/network=可能未落库——文案区分） */}
+        {/* 闪光时刻（2026-08-20，拾光=拾到我们没发现的闪光）：琥珀金光点 + 点亮动画，hover 看内容 */}
+        {!isUser && msg.glint && (
+          <div className="mt-2 flex items-center gap-1.5 cursor-help" title={msg.glint}>
+            <span className="lumen-dot lumen-dot-attention lumen-dot-ignite shrink-0" />
+            <span className="text-[11px] text-amber/90">拾到一粒光</span>
+          </div>
+        )}
+        {/* #6 失败提示 + 手动重试（backend=已落库；timeout/interrupted/network=可能未落库——文案区分）
+            hint=后端给的领航建议（2026-08-20 异常收尾：错误不是终点是引导） */}
         {!isUser && msg.failed && (
           <div className="mt-2 flex flex-wrap items-center gap-2 text-[12px]">
             <span className="text-error/90">⚠️ {msg.failed.message}</span>
+            {msg.failed.hint && (
+              <span className="text-primary/60">（{msg.failed.hint}）</span>
+            )}
             <button
               onClick={() => retry(msg.content || (msg.failed as { message: string }).message)}
               className="px-2.5 py-1 rounded-lg border border-hairline text-primary/80 hover:text-primary hover:border-primary/40 hover:bg-elevated transition-colors duration-150"
@@ -180,7 +203,7 @@ export default function MessageBubble({ msg }: { msg: ChatMessage }) {
           >
             <button
               onClick={copy}
-              className="text-[rgba(236,233,225,0.4)] hover:text-primary"
+              className="text-ink-dim hover:text-primary"
               aria-label="复制回答"
             >
               <Icon name={copied ? 'check' : 'copy'} size={14} className={copied ? 'text-success' : ''} />
@@ -188,7 +211,7 @@ export default function MessageBubble({ msg }: { msg: ChatMessage }) {
             <button
               onClick={() => giveFeedback(1)}
               disabled={!!feedback}
-              className={`text-[rgba(236,233,225,0.4)] hover:text-success ${
+              className={`text-ink-dim hover:text-success ${
                 feedback === 'up' ? '!text-success' : ''
               }`}
               aria-label="讲得好"
@@ -199,7 +222,7 @@ export default function MessageBubble({ msg }: { msg: ChatMessage }) {
             <button
               onClick={() => giveFeedback(-1)}
               disabled={!!feedback}
-              className={`text-[rgba(236,233,225,0.4)] hover:text-error ${
+              className={`text-ink-dim hover:text-error ${
                 feedback === 'down' ? '!text-error' : ''
               }`}
               aria-label="没听懂"

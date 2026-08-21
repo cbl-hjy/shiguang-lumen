@@ -1,6 +1,6 @@
 @echo off
 chcp 65001 >nul
-cd /d "%~dp0"
+cd /d D:\work_buddy\personal-agent
 
 rem #21 安全护栏：0.0.0.0 监听必须 SHIGUANG_TOKEN 已配置（门锁没装不能开门）
 findstr /C:"SHIGUANG_TOKEN=" .env >nul 2>&1
@@ -14,12 +14,12 @@ if errorlevel 1 (
 rem 前端产物新鲜度（#B 2026-08-13）：启动 = 最新产物，从流程上消灭"旧产物"可能。
 rem dist/build.json 时间戳由后端 index 路由暴露（响应头 X-Built-At + 启动日志），一眼可查服务的是哪天的产物
 echo [build] 构建前端产物（幂等，几秒）...
-cd /d "%~dp0frontend"
+cd /d D:\work_buddy\personal-agent\frontend
 call npm run build >nul 2>&1
 if errorlevel 1 (
     echo [build] 失败——但服务仍启动（可能用旧产物）。错误信息见上
 )
-cd /d "%~dp0"
+cd /d D:\work_buddy\personal-agent
 
 rem 看门狗：拉起服务 + 崩溃自动重启 + 日志（Ctrl+C 优雅退出）
 echo ============================================

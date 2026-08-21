@@ -6,9 +6,11 @@ MAX_CHARS = 4000
 
 def read_document(path: str, max_chars: int = MAX_CHARS) -> str:
     """读取本地文档文本（PDF/docx/pptx/xlsx/md/html 等）。返回文本（自动截断）。"""
+    from app.tools.errors import io_error, tool_err
+
     p = Path(path)
     if not p.exists():
-        return f"(文件不存在: {path})"
+        return io_error("读取文档", f"文件不存在: {path}")
     try:
         suffix = p.suffix.lower()
         if suffix == ".pdf":
@@ -21,7 +23,7 @@ def read_document(path: str, max_chars: int = MAX_CHARS) -> str:
 
             text = MarkItDown().convert(str(p)).text_content
     except Exception as e:
-        return f"(读取失败: {e})"
+        return tool_err("读取文档", str(e))
     if not text or not text.strip():
         return "(未能提取文字——可能是扫描件/图片型 PDF，可改用 OCR 识别)"
     if len(text) > max_chars:

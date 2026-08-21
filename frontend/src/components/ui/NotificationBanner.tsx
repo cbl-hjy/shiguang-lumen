@@ -88,16 +88,16 @@ export default function NotificationBanner() {
             <Icon name="bell" size={15} className="text-primary" />
           </div>
           <div className="flex-1 min-w-0">
-            <div className="text-[12px] font-medium text-[rgba(236,233,225,0.9)] mb-0.5">
+            <div className="text-[12px] font-medium text-ink mb-0.5">
               拾光记得你
             </div>
-            <p className="text-[13px] leading-relaxed text-[rgba(236,233,225,0.7)]">
+            <p className="text-[13px] leading-relaxed text-ink-muted">
               {current.content}
             </p>
           </div>
           <button
             onClick={dismiss}
-            className="shrink-0 p-1 rounded-md text-[rgba(236,233,225,0.4)] hover:text-[rgba(236,233,225,0.8)] hover:bg-surface transition-colors duration-150"
+            className="shrink-0 p-1 rounded-md text-ink-dim hover:text-ink/85 hover:bg-surface transition-colors duration-150"
             aria-label="关闭提醒"
           >
             <Icon name="x" size={14} />

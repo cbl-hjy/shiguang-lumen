@@ -7,7 +7,7 @@ import Icon from '../ui/Icon'
 const STATUS_META: Record<string, { icon: 'check' | 'x' | 'chevron-right'; cls: string }> = {
   done: { icon: 'check', cls: 'text-primary' },
   failed: { icon: 'x', cls: 'text-error' },
-  pending: { icon: 'chevron-right', cls: 'text-[rgba(236,233,225,0.3)]' },
+  pending: { icon: 'chevron-right', cls: 'text-ink-dim/70' },
 }
 
 export default function TaskProgressCard({ runId }: { runId: string }) {
@@ -51,10 +51,10 @@ export default function TaskProgressCard({ runId }: { runId: string }) {
       aria-label="并行任务进度"
     >
       <div className="flex items-center justify-between px-3 py-2 border-b border-hairline">
-        <span className="text-[12px] font-medium text-[rgba(236,233,225,0.85)]">
+        <span className="text-[12px] font-medium text-ink/90">
           并行研究中
         </span>
-        <span className="text-[11px] text-[rgba(236,233,225,0.4)]">
+        <span className="text-[11px] text-ink-dim">
           {doneCount}/{entries.length}
         </span>
       </div>
@@ -67,8 +67,8 @@ export default function TaskProgressCard({ runId }: { runId: string }) {
               <span
                 className={`truncate ${
                   status === 'done' || status === 'failed'
-                    ? 'text-[rgba(236,233,225,0.75)]'
-                    : 'text-[rgba(236,233,225,0.45)]'
+                    ? 'text-ink/80'
+                    : 'text-ink-dim'
                 }`}
                 title={name}
               >

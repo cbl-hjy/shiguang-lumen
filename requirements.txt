@@ -4,10 +4,14 @@ fastapi>=0.110
 uvicorn>=0.30
 openai>=1.60
 python-multipart>=0.0.9
+requests>=2.31        # 搜索 API 直调
 
-# 记忆/向量
+# 记忆/向量（embedding 走 Ollama 服务，本地加载为可选）
 sentence-transformers>=3.0
 chromadb>=0.5
+
+# 识图（GLM-4.6V-Flash 视觉理解，免费）
+zai-sdk>=0.2
 
 # 知识库（LlamaIndex）
 llama-index-core>=0.12

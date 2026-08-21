@@ -3,7 +3,7 @@ import { deleteEvolutionItem, type EvolveItem } from '../../api/memory'
 import DetailModal from '../ui/DetailModal'
 import Icon from '../ui/Icon'
 
-/* 反思/技能条目卡：一行（类型+日期，只做入口）→ 点击弹中央 modal（14px 只读全文 + 删除）
+/* 反思/技能条目卡：一行（类型+日期，只做入口）→ 点击弹中央 modal（14px 只读全文 + 熄星）
    破坏性操作只留一个刻意入口；accordion 移除（长内容 modal 内滚动才读得全） */
 export default function EvolveCard({
   item,
@@ -39,16 +39,16 @@ export default function EvolveCard({
         <Icon
           name={isReflection ? 'brain' : 'book'}
           size={13}
-          className={isReflection ? 'text-[rgba(236,233,225,0.5)]' : 'text-primary/80'}
+          className={isReflection ? 'text-ink-dim' : 'text-primary/80'}
         />
         <span
           className={`flex-1 text-[12px] truncate ${
-            isReflection ? 'text-[rgba(236,233,225,0.55)]' : 'text-[rgba(236,233,225,0.65)]'
+            isReflection ? 'text-ink-dim' : 'text-ink-muted'
           }`}
         >
           {isReflection ? '反思' : '技能'} · {item.date?.slice(5, 16)}
         </span>
-        <Icon name="chevron-right" size={12} className="text-[rgba(236,233,225,0.3)]" />
+        <Icon name="chevron-right" size={12} className="text-ink-dim/70" />
       </button>
 
       <DetailModal
@@ -59,10 +59,10 @@ export default function EvolveCard({
           <button
             onClick={del}
             disabled={deleting}
-            className="flex items-center gap-1 text-[12px] text-[rgba(236,233,225,0.6)] hover:text-error transition-colors disabled:opacity-50"
+            className="flex items-center gap-1 text-[12px] text-ink-muted hover:text-error transition-colors disabled:opacity-50"
           >
             <Icon name="trash" size={12} />
-            {deleting ? '删除中…' : '删除'}
+            {deleting ? '熄星中…' : '熄星'}
           </button>
         }
       >
