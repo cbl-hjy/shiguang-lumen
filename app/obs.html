@@ -164,7 +164,7 @@ async function load(){
     const badSum = (integ.corrupt_lines||0) + (integ.write_fails||0);
     const integMsg = badSum===0 ? `<span style="color:var(--teal)">✓ 完整</span> · 事件 ${fmt(integ.events||0)} · 进行中 ${openRuns}`
       : `<span style="color:var(--red)">⚠ 数据缺失</span> · 损坏 ${integ.corrupt_lines||0} 行 · 写失败 ${integ.write_fails||0}（排查磁盘/权限）`;
-    document.getElementById('genAt').innerHTML = `更新于 ${d.generated_at||'—'} · <span style="font-size:11px">${integMsg}</span>`;
+    document.getElementById('genAt').innerHTML = `更新于 ${d.generated_at||'—'} · Prompt v${d.prompt_version||'0.0'} · <span style="font-size:11px">${integMsg}</span>`;
 
     drawLlm(t.llm_stats||[]);
     drawTools(t.tool_stats||[]);

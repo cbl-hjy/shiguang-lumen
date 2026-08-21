@@ -564,6 +564,7 @@ async def chat(req: ChatRequest, request: Request) -> StreamingResponse:
         # B1 消息级持久化（2026-08-20，行业标准：用户输入无条件先落库，不依赖流完成）：
         # 壳层 = 前置落用户消息 + try/finally 兜底（断流/异常/正常都执行 _finalize，同步函数不被打断）
         state = {"messages": [], "error_msg": [""], "t0": time.monotonic()}
+        state["history"] = history  # 缓存提取用（模型实际输入是 history——2026-08-21 修复）
         task_run_id = uuid.uuid4().hex[:10]
         tracker = ProgressTracker(task_run_id)
         try:
@@ -609,6 +610,21 @@ async def chat(req: ChatRequest, request: Request) -> StreamingResponse:
         turn_started = False
         error_msg = ""
         messages = state["messages"]
+        _tool_names: list[str] = []  # 本轮用到的工具（缓存安全分类用，2026-08-21）
+        # 外部/易变工具：结果依赖外部或会变 → 该轮不缓存（本地稳定工具可缓存——重复问结果一致）
+        _UNSAFE_CACHE_TOOLS = {"web_search", "bocha_search", "analyze_image", "generate_image", "python_sandbox"}
+        # LLM 响应缓存（2026-08-21 harness 加厚：重复提问短路省成本；不做死约束——不命中照常调用）
+        from app.agent.llm_cache import lookup as _cache_lookup
+
+        _last_user = user_text.strip()[:200]  # 缓存键 = 当前用户消息（history 提取复杂且新会话为空，直接用请求文本）
+        if _last_user and len(_last_user) > 8:
+            cached = _cache_lookup(_last_user)
+            if cached:
+                # 命中：直接作为回复流式输出（带"缓存回复"标记，信息给觉察）
+                yield _sse({"type": "turn_start"})
+                yield _sse({"type": "text", "text": cached})
+                yield _sse({"type": "done", "session_id": state.get("session_id", "")})
+                return
         # #2 fallback 链（P0）：主模型 → 备用模型（错误分类/空 content 触发；熔断冷却期只试主）
         from app.agent.model import (
             get_fallback_model,
@@ -667,6 +683,7 @@ async def chat(req: ChatRequest, request: Request) -> StreamingResponse:
                                 tool_name = getattr(part, "tool_name", None)
                                 if tool_name:
                                     used_tool = True
+                                    _tool_names.append(tool_name)
                                     if not turn_started:
                                         yield _sse({"type": "turn_start"})
                                         turn_started = True
@@ -727,6 +744,17 @@ async def chat(req: ChatRequest, request: Request) -> StreamingResponse:
                     obs.llm_end(run_id, tag, True)  # LLM 调用成功（2026-08-21 补：配对算耗时）
                     if full_text:
                         obs.llm_output(run_id, tag, full_text)  # 回复全文进 trace（重放可见，2026-08-21 补）
+                    # 纯问答轮存缓存（无工具调用才存——有工具的结果依赖外部不可缓存；harness 兜底不做死约束）
+                    if full_text and not any(t in _UNSAFE_CACHE_TOOLS for t in _tool_names):
+                        # 本地稳定工具轮次可缓存（重复问结果一致）；外部/易变工具不缓存（2026-08-21）
+                        try:
+                            from app.agent.llm_cache import store as _cache_store
+
+                            obs.hook(run_id, "cache_store", True, f"u={len(_last_user)} f={len(full_text)} tools={_tool_names}")
+                            _cache_store(_last_user or "", full_text)
+                        except Exception as e:
+                            obs.hook(run_id, "cache_store", False, str(e)[:80])
+                            pass
                     circuit_record(True)
                     break
                 # 空 content（166 轮 0 字场景的正主）：无文本且无工具调用 → 确定性判定（有没有字/有没有调工具）

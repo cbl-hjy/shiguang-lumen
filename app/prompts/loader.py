@@ -24,6 +24,23 @@ _FALLBACK_STATIC = """行为原则（不是操作手册，判断权在你）：
 记忆写入规范：一条一事实，可验证，未来有用才写；绝对日期；重要带证据。四原语：重复不写(NOOP)/补充edit_memory(UPDATE)/矛盾forget+重写(DELETE+ADD)/全新或用户明确说的决定→立即remember(ADD)，别因先确认拖延。记困惑不记情绪：纠结→cat=困惑+开放中，想通UPDATE已解决；情绪归状态轮。学习信息必记：进度/目标/卡点/学到哪，平淡也记(画像靠它们)。类别=词汇表(学习记录/进度/目标/偏好/困惑/关系/错误记录/反思/笔记)，乱词自动归一"""
 
 
+_prompt_version = None
+
+
+def prompt_version() -> str:
+    """当前 Prompt 版本（2026-08-21 harness 加厚：注入日志/星图可见；无版本字段回退 '0.0'）"""
+    global _prompt_version
+    if _prompt_version is None:
+        try:
+            import yaml
+
+            data = yaml.safe_load((_PROMPTS_DIR / "static_prompt.yaml").read_text(encoding="utf-8"))
+            _prompt_version = str((data or {}).get("version", "0.0"))
+        except Exception:
+            _prompt_version = "0.0"
+    return _prompt_version
+
+
 def load_static_prompt() -> str:
     """读取静态行为前缀（字节稳定注入用）。yaml 缺失/损坏 → fallback 内置常量。
     渲染：title + sections（每组渲染"标题"行 + "- 条目"列表，2026-08-20 P2 结构化——

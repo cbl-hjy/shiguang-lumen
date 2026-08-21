@@ -198,11 +198,13 @@ def observability_summary():
     trace = _agg_trace(evs)
     token = _agg_token()
     from app import observability as _obs
+    from app.prompts.loader import prompt_version
 
     return {
         "trace": trace,
         "token": token,
         "council_errors": _agg_council_errors(),
+        "prompt_version": prompt_version(),
         "integrity": {
             "events": len(evs),
             "corrupt_lines": corrupt,
