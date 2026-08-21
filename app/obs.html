@@ -56,7 +56,8 @@
   .bar-row{display:flex;align-items:center;gap:10px;margin-bottom:9px}
   .bar-name{width:150px;color:var(--muted);font-size:12px;text-align:right;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .bar-track{flex:1;background:var(--bg2);border-radius:6px;height:20px;position:relative;overflow:hidden}
-  .bar-fill{height:100%;border-radius:6px;background:linear-gradient(90deg,var(--teal-dim),var(--teal));transition:width .6s ease}
+  .bar-fill{height:100%;border-radius:6px;background:linear-gradient(90deg,var(--teal-dim),var(--teal));transition:width .6s ease;position:relative;display:flex;align-items:center;justify-content:flex-end}
+  .bar-num{padding-right:8px;font-size:11px;font-weight:700;color:#04241D;white-space:nowrap}
   .bar-meta{width:110px;font-size:11px;color:var(--muted)}
 
   /* 折线图 */
@@ -146,12 +147,12 @@ function drawTools(list){
   if(!list.length){el.innerHTML='<div class="empty">暂无工具调用记录（开始对话后自动积累）</div>';return}
   const max = Math.max(...list.map(x=>x.calls));
   el.innerHTML = list.slice(0,8).map(x=>{
-    const w = Math.max(3, x.calls/max*100);
+    const w = Math.max(4, x.calls/max*100);
     const rate = x.success_rate||0;
     const rateColor = rate>=90?'var(--teal)':rate>=60?'var(--gold)':'var(--red)';
     return `<div class="bar-row">
       <div class="bar-name" title="${x.name}">${x.name}</div>
-      <div class="bar-track"><div class="bar-fill" style="width:${w}%"></div></div>
+      <div class="bar-track"><div class="bar-fill" style="width:${w}%"><span class="bar-num">${x.calls}</span></div></div>
       <div class="bar-meta">${x.calls} 次 · <span style="color:${rateColor}">${rate}%</span> · ${x.avg_ms}ms</div>
     </div>`;
   }).join('');
@@ -160,19 +161,27 @@ function drawTools(list){
 function drawToken(days){
   const el = document.getElementById('tokenChart');
   if(!days.length){el.innerHTML='<div class="empty">暂无 token 记录</div>';return}
-  const W=920,H=150,P=28,step=(W-P*2)/Math.max(days.length-1,1);
+  const W=920,H=170,P=30,step=(W-P*2)/Math.max(days.length-1,1);
   const maxV=Math.max(...days.map(x=>x.tokens),1);
+  const fmtK = v => v>=10000 ? (v/1000).toFixed(0)+'K' : (v>=1000 ? (v/1000).toFixed(1)+'K' : v);
   const pts = days.map((x,i)=>[P+i*step, H-P-(x.tokens/maxV)*(H-P*2)]).map(p=>p.join(',')).join(' ');
   const area = `${P},${H-P} ${pts} ${W-P},${H-P}`;
   const grid = [0.25,0.5,0.75].map(g=>{
     const y = H-P-(H-P*2)*g;
     return `<line x1="${P}" y1="${y}" x2="${W-P}" y2="${y}" stroke="#232D3D" stroke-width="1" stroke-dasharray="3 4"/>`;
   }).join('');
+  // 每点数据标签（DeepSeek 风格：点上方精确数值）
+  const labels = days.map((x,i)=>{
+    const cx = P+i*step, cy = H-P-(x.tokens/maxV)*(H-P*2);
+    const dy = days.length>7 ? (i%2===0? -14 : -4) : -10;  // 点多时上下错开防重叠
+    return `<text x="${cx}" y="${cy+dy}" text-anchor="middle" font-size="10.5" fill="#D9A441" font-weight="600">${fmtK(x.tokens)}</text>
+      <circle cx="${cx}" cy="${cy}" r="3.5" fill="var(--gold)"/>`;
+  }).join('');
   el.innerHTML = `<svg class="chart" viewBox="0 0 ${W} ${H}">
     ${grid}
     <polygon points="${area}" fill="rgba(62,201,176,.08)"/>
     <polyline points="${pts}" fill="none" stroke="var(--teal)" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>
-    ${days.map((x,i)=>`<circle cx="${P+i*step}" cy="${H-P-(x.tokens/maxV)*(H-P*2)}" r="3.5" fill="var(--gold)"/>`).join('')}
+    ${labels}
   </svg>`;
   const total = days.reduce((a,b)=>a+b.tokens,0);
   document.getElementById('tokenTotal').textContent = `合计 ${fmt(total)} tok · ${days[0]?.date} ~ ${days[days.length-1]?.date}`;
@@ -185,11 +194,11 @@ function drawErrors(errs, councilErr){
   const max = Math.max(...items.map(x=>x[1]), councilErr, 1);
   let html = items.map(([k,v])=>{
     const w = v/max*100;
-    return `<div class="err-row"><div class="err-name">${k}</div><div class="err-track"><div class="err-fill" style="width:${w}%"></div></div><div style="width:40px;font-size:11px;color:var(--muted)">${v}</div></div>`;
+    return `<div class="err-row"><div class="err-name">${k}</div><div class="err-track"><div class="err-fill" style="width:${w}%"><span class="bar-num">${v}</span></div></div></div>`;
   }).join('');
   if(councilErr){
     const w = councilErr/max*100;
-    html += `<div class="err-row"><div class="err-name">会议失败(council_errors)</div><div class="err-track"><div class="err-fill" style="width:${w}%"></div></div><div style="width:40px;font-size:11px;color:var(--muted)">${councilErr}</div></div>`;
+    html += `<div class="err-row"><div class="err-name">会议失败(council_errors)</div><div class="err-track"><div class="err-fill" style="width:${w}%"><span class="bar-num">${councilErr}</span></div></div></div>`;
   }
   el.innerHTML = html;
 }
