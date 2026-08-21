@@ -161,30 +161,82 @@ function drawTools(list){
 function drawToken(days){
   const el = document.getElementById('tokenChart');
   if(!days.length){el.innerHTML='<div class="empty">暂无 token 记录</div>';return}
-  const W=920,H=170,P=30,step=(W-P*2)/Math.max(days.length-1,1);
-  const maxV=Math.max(...days.map(x=>x.tokens),1);
-  const fmtK = v => v>=10000 ? (v/1000).toFixed(0)+'K' : (v>=1000 ? (v/1000).toFixed(1)+'K' : v);
-  const pts = days.map((x,i)=>[P+i*step, H-P-(x.tokens/maxV)*(H-P*2)]).map(p=>p.join(',')).join(' ');
-  const area = `${P},${H-P} ${pts} ${W-P},${H-P}`;
-  const grid = [0.25,0.5,0.75].map(g=>{
-    const y = H-P-(H-P*2)*g;
-    return `<line x1="${P}" y1="${y}" x2="${W-P}" y2="${y}" stroke="#232D3D" stroke-width="1" stroke-dasharray="3 4"/>`;
-  }).join('');
-  // 每点数据标签（DeepSeek 风格：点上方精确数值）
-  const labels = days.map((x,i)=>{
-    const cx = P+i*step, cy = H-P-(x.tokens/maxV)*(H-P*2);
-    const dy = days.length>7 ? (i%2===0? -14 : -4) : -10;  // 点多时上下错开防重叠
-    return `<text x="${cx}" y="${cy+dy}" text-anchor="middle" font-size="10.5" fill="#D9A441" font-weight="600">${fmtK(x.tokens)}</text>
-      <circle cx="${cx}" cy="${cy}" r="3.5" fill="var(--gold)"/>`;
-  }).join('');
-  el.innerHTML = `<svg class="chart" viewBox="0 0 ${W} ${H}">
-    ${grid}
-    <polygon points="${area}" fill="rgba(62,201,176,.08)"/>
-    <polyline points="${pts}" fill="none" stroke="var(--teal)" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>
-    ${labels}
-  </svg>`;
+  // 智能形态：<3 天用柱状（直观），≥3 天用折线（趋势）——数据少时折线只有几个点不成形
+  if(days.length < 3){ drawTokenBars(el, days); }
+  else { drawTokenLine(el, days); }
   const total = days.reduce((a,b)=>a+b.tokens,0);
   document.getElementById('tokenTotal').textContent = `合计 ${fmt(total)} tok · ${days[0]?.date} ~ ${days[days.length-1]?.date}`;
+}
+
+function drawTokenBars(el, days){
+  const W=940,H=170,P_L=52,P_R=14,P_T=24,P_B=26;
+  const iw=W-P_L-P_R, ih=H-P_T-P_B;
+  const maxV = Math.max(...days.map(x=>x.tokens),1);
+  const bw = Math.min(90, iw/days.length*0.55);
+  const fmtK = v => v>=10000 ? (v/1000).toFixed(0)+'K' : (v>=1000 ? (v/1000).toFixed(1)+'K' : String(v));
+  const grid = [0,0.33,0.67,1].map(g=>{
+    const y = P_T + ih*(1-g);
+    const val = g===0 ? '0' : fmtK(maxV*g);
+    return `<line x1="${P_L}" y1="${y}" x2="${W-P_R}" y2="${y}" stroke="#232D3D" stroke-width="1" stroke-dasharray="3 4"/>
+      <text x="${P_L-8}" y="${y+4}" text-anchor="end" font-size="10" fill="#6B7789">${val}</text>`;
+  }).join('');
+  const bars = days.map((x,i)=>{
+    const cx = P_L + (iw/days.length)*(i+0.5);
+    const bh = Math.max(3, (x.tokens/maxV)*ih);
+    const by = P_T + ih - bh;
+    return `<rect x="${cx-bw/2}" y="${by}" width="${bw}" height="${bh}" rx="4" fill="url(#barGrad)" opacity="0.9"/>
+      <text x="${cx}" y="${by-7}" text-anchor="middle" font-size="11" fill="#D9A441" font-weight="600">${fmtK(x.tokens)}</text>
+      <text x="${cx}" y="${H-8}" text-anchor="middle" font-size="10.5" fill="${i===days.length-1?'#D9A441':'#6B7789'}">${x.date.slice(5)}</text>`;
+  }).join('');
+  el.innerHTML = `<svg class="chart" viewBox="0 0 ${W} ${H}">
+    <defs><linearGradient id="barGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#3EC9B0"/><stop offset="100%" stop-color="#1D6B5E"/>
+    </linearGradient></defs>
+    ${grid}
+    <line x1="${P_L}" y1="${H-P_B}" x2="${W-P_R}" y2="${H-P_B}" stroke="#2C3A4D" stroke-width="1.5"/>
+    ${bars}
+  </svg>`;
+}
+
+function drawTokenLine(el, days){
+  const W=940,H=190,P_L=52,P_R=14,P_T=26,P_B=26;
+  const iw=W-P_L-P_R, ih=H-P_T-P_B;
+  const step = iw/Math.max(days.length-1,1);
+  const maxV = Math.max(...days.map(x=>x.tokens),1);
+  const fmtK = v => v>=10000 ? (v/1000).toFixed(0)+'K' : (v>=1000 ? (v/1000).toFixed(1)+'K' : String(v));
+  const X = i => P_L + i*step;
+  const Y = v => P_T + ih - (v/maxV)*ih;
+
+  const grid = [0,0.33,0.67,1].map(g=>{
+    const y = P_T + ih*(1-g);
+    const val = g===0 ? '0' : fmtK(maxV*g);
+    return `<line x1="${P_L}" y1="${y}" x2="${W-P_R}" y2="${y}" stroke="#232D3D" stroke-width="1" stroke-dasharray="3 4"/>
+      <text x="${P_L-8}" y="${y+4}" text-anchor="end" font-size="10" fill="#6B7789">${val}</text>`;
+  }).join('');
+
+  const every = days.length>10 ? Math.ceil(days.length/6) : 1;
+  const xlabels = days.map((x,i)=>{
+    if(i % every !== 0 && i !== days.length-1) return '';
+    return `<text x="${X(i)}" y="${H-8}" text-anchor="middle" font-size="10.5" fill="${i===0||i===days.length-1?'#D9A441':'#6B7789'}">${x.date.slice(5)}</text>`;
+  }).join('');
+
+  const pts = days.map((x,i)=>`${X(i)},${Y(x.tokens)}`).join(' ');
+  const area = `${P_L},${H-P_B} ${pts} ${W-P_R},${H-P_B}`;
+
+  const dots = days.map((x,i)=>{
+    const cx=X(i), cy=Y(x.tokens);
+    const above = cy > P_T+ih*0.75 ? -12 : (cy < P_T+ih*0.25 ? 16 : (i%2===0 ? -12 : 16));
+    return `<text x="${cx}" y="${cy+above}" text-anchor="middle" font-size="10.5" fill="#D9A441" font-weight="600">${fmtK(x.tokens)}</text>
+      <circle cx="${cx}" cy="${cy}" r="3.5" fill="var(--gold)"/>`;
+  }).join('');
+
+  el.innerHTML = `<svg class="chart" viewBox="0 0 ${W} ${H}">
+    ${grid}
+    <line x1="${P_L}" y1="${H-P_B}" x2="${W-P_R}" y2="${H-P_B}" stroke="#2C3A4D" stroke-width="1.5"/>
+    <polygon points="${area}" fill="rgba(62,201,176,.08)"/>
+    <polyline points="${pts}" fill="none" stroke="var(--teal)" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>
+    ${dots}${xlabels}
+  </svg>`;
 }
 
 function drawErrors(errs, councilErr){
