@@ -1,0 +1,358 @@
+"""个人知识库：LlamaIndex + bge-m3(Ollama 服务) + chromadb + DeepSeek（POC5 已验证）
+分工：知识库=用户积累的外部资料/笔记；记忆=用户自身状态（chromadb 在 memory 层）
+embedding 走 Ollama 服务（2026-08-25 迁移，方案 D 对齐）：原 HuggingFaceEmbedding(device="cuda")
+本地全量加载 = 与 memory 层 Ollama 并存的第二个 CUDA context（08-19 TDR 同模式）——统一走
+Ollama 单一 GPU 实例，物理上消灭并发 OOM；kb 为低频独立索引，Ollama 挂时 kb 功能报错可接受
+（memory 层已有熔断降级，kb 无熔断=低频可接受，待工程化清单后续可补）
+"""
+
+from pathlib import Path
+from app.config import DATA_DIR
+
+from app.config import DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL, DEEPSEEK_MODEL
+
+from app.auth_core import get_current_user_id
+from app.user_data import get_user_data_dir
+
+
+def KB_DIR() -> Path:
+    uid = get_current_user_id()
+    if uid:
+        return get_user_data_dir(uid) / "kb"
+    return DATA_DIR / "data" / "kb"
+
+
+def CHROMA_DIR() -> Path:
+    return KB_DIR() / "chroma"
+
+# Ollama bge-m3 服务端点（与 app/memory/vector.py 同源，单一 GPU 实例）
+OLLAMA_URL = "http://127.0.0.1:11434"
+OLLAMA_EMBED_MODEL = "bge-m3"
+# 请求级 keep_alive：kb embed 也保持模型驻留（配合 vector.py 的 30m，统一消除 4.15s 冷启动）
+OLLAMA_KEEP_ALIVE = "30m"
+
+_engines: dict = {}
+
+
+def _get_engine():
+    """懒加载（首次调用才初始化 Ollama embed + 建索引；无本地模型加载）。
+    P0：按用户缓存（uid=None 共享 legacy 实例）"""
+    uid = get_current_user_id()
+    if uid in _engines:
+        return _engines[uid]
+    from llama_index.core import Settings, VectorStoreIndex
+    from llama_index.embeddings.ollama import OllamaEmbedding
+    from llama_index.llms.openai_like import OpenAILike
+    from llama_index.vector_stores.chroma import ChromaVectorStore
+    import chromadb
+
+    Settings.embed_model = OllamaEmbedding(
+        model_name=OLLAMA_EMBED_MODEL,
+        base_url=OLLAMA_URL,
+        ollama_additional_kwargs={"keep_alive": OLLAMA_KEEP_ALIVE},
+    )
+    Settings.llm = OpenAILike(
+        model=DEEPSEEK_MODEL,
+        api_key=DEEPSEEK_API_KEY,
+        api_base=DEEPSEEK_BASE_URL,
+        is_chat_model=True,
+        context_window=128000,
+    )
+    chroma_client = chromadb.PersistentClient(path=str(CHROMA_DIR()))
+    collection = chroma_client.get_or_create_collection("kb_main")
+    vector_store = ChromaVectorStore(chroma_collection=collection)
+    engine = VectorStoreIndex.from_vector_store(vector_store).as_query_engine(similarity_top_k=3)
+    _engines[uid] = engine
+    return engine
+
+
+async def kb_ingest(text: str, source: str = "用户资料") -> str:
+    """把一段资料/笔记加入个人知识库（落盘一份 + 入向量索引）。重阻塞（GPU embedding + chromadb）丢专用 executor"""
+    from app.tools.errors import (
+        arg_error,
+        timeout_error,
+    )  # 2026-08-27 Ruff F821 修复：114/126 行用到 tool_err 但未导入（运行时 NameError）
+
+    import asyncio
+    from concurrent.futures import ThreadPoolExecutor
+
+    if not text.strip():
+        return arg_error("知识库入库", "内容为空")
+    loop = asyncio.get_running_loop()
+    with ThreadPoolExecutor(max_workers=1) as ex:
+        # 超时护栏（2026-08-17）：嵌入+索引可能慢，120s 上限
+        try:
+            return await asyncio.wait_for(
+                loop.run_in_executor(ex, _kb_ingest_sync, text, source), timeout=120
+            )
+        except asyncio.TimeoutError:
+            return timeout_error("知识库入库", "超时 >120s")
+
+
+def _kb_ingest_sync(text: str, source: str) -> str:
+    """同步实现：落盘 + 入向量索引（GPU 加载/embedding 重阻塞，由 async 包装丢 executor）"""
+    text = text.strip()
+    if not text:
+        return "(内容为空)"
+    import hashlib
+
+    from app.tools.errors import (
+        tool_err,
+    )  # 2026-08-27 Ruff F821：114/126 行用 tool_err 但函数内未导入（运行时 NameError 被外层兜住未暴露）
+    from llama_index.core import Document
+    from llama_index.core.ingestion import IngestionPipeline
+    from llama_index.core.node_parser import SentenceSplitter
+    from llama_index.vector_stores.chroma import ChromaVectorStore
+    import chromadb
+
+    KB_DIR().mkdir(parents=True, exist_ok=True)
+    # 先初始化 Settings（embed_model/llm），from_documents 依赖
+    _get_engine()
+    # 文件持久化一份（人可审）——路径存入 metadata，供"命中后精读原文"
+    # 文件名=source 清洗 + 内容 md5 前 8 位（确定性——修复 2026-08-20：原 hash(text) 受
+    # PYTHONHASHSEED 随机化影响，同一内容每次进程生成不同文件名 → 重复入库产生多份文件）
+    safe = "".join(c for c in source if c.isalnum() or c in "-_")[:40] or "doc"
+    digest = hashlib.md5(text.encode("utf-8")).hexdigest()[:8]
+    doc_file = KB_DIR() / f"{safe}_{digest}.md"
+    if not doc_file.exists():
+        doc_file.write_text(f"# {source}\n\n{text}\n", encoding="utf-8")
+    chroma_client = chromadb.PersistentClient(path=str(CHROMA_DIR()))
+    collection = chroma_client.get_or_create_collection("kb_main")
+    vector_store = ChromaVectorStore(chroma_collection=collection)
+    # IngestionPipeline.run 只做切分返回 nodes（不自动嵌入/落库，0.14 实测），需手动嵌入 + add
+    pipeline = IngestionPipeline(
+        transformations=[SentenceSplitter(chunk_size=200, chunk_overlap=20)]
+    )
+    nodes = pipeline.run(
+        documents=[Document(text=text, metadata={"source": source, "file_path": str(doc_file)})]
+    )
+    if not nodes:
+        return tool_err("知识库入库", "没有生成节点")
+    try:
+        from llama_index.core import Settings
+
+        embed_model = Settings.embed_model
+        embeddings = embed_model.get_text_embedding_batch(
+            [n.get_content(metadata_mode="none") for n in nodes]
+        )
+        for n, emb in zip(nodes, embeddings, strict=True):
+            n.embedding = emb
+        vector_store.add(nodes)
+    except Exception as e:
+        return tool_err("知识库入库", str(e))
+    return f"已加入知识库（{len(text)} 字符，来源 {source}）"
+
+
+def _read_original_context(file_path: str, probe: str, window: int = 600) -> str:
+    """精读：定位切片在源文件中的位置，返回上下文窗口（±600 字符）"""
+    try:
+        text = Path(file_path).read_text(encoding="utf-8")
+    except Exception:
+        return ""
+    idx = text.find(probe[:50])
+    if idx < 0:
+        return text[: window * 2]
+    start = max(0, idx - window)
+    end = min(len(text), idx + window + len(probe))
+    return text[start:end]
+
+
+async def kb_search(query: str, deep: bool = False) -> str:
+    """检索个人知识库并回答（带出处）。deep=True 附原文段落（需完整细节时用）"""
+    from app.tools.errors import (
+        arg_error,
+        timeout_error,
+        tool_err,
+    )  # 2026-08-27 Ruff F821 修复：114/126 行用到 tool_err 但未导入（运行时 NameError）, tool_err
+
+    import asyncio
+    from concurrent.futures import ThreadPoolExecutor
+
+    q = query.strip()
+    if not q:
+        return arg_error("知识库", "查询为空")
+    try:
+        # query_engine.query 是重阻塞（GPU embedding + LLM 生成答案）——丢专用 executor，避免堵事件循环
+        engine = _get_engine()
+        loop = asyncio.get_running_loop()
+        with ThreadPoolExecutor(max_workers=1) as ex:
+            # 超时护栏（2026-08-17）：LLM 生成最易慢/卡——60s 上限，超时返回提示而非干等
+            resp = await asyncio.wait_for(loop.run_in_executor(ex, engine.query, q), timeout=60)
+    except asyncio.TimeoutError:
+        return timeout_error("知识库", "检索超时 >60s")
+    except Exception as e:
+        return tool_err("知识库", str(e))
+    cites = []
+    originals = []
+    for i, n in enumerate(resp.source_nodes, 1):
+        meta = getattr(n.node, "metadata", {}) or {}
+        cites.append(f"  [{i}] {meta.get('source', '?')}: {n.node.text[:50]}…")
+        if deep:
+            fp = meta.get("file_path", "")
+            if fp and Path(fp).exists():
+                ctx = _read_original_context(fp, n.node.text)
+                if ctx:
+                    originals.append(f"  [{i}] {ctx[:800]}")
+    out = f"{str(resp.response)[:800]}\n引用:\n" + "\n".join(cites)
+    if originals:
+        out += "\n\n原文段落（精读）:\n" + "\n\n".join(originals)
+    return out
+
+
+def kb_reindex() -> str:
+    """从源文件重建索引（源文件是权威，索引可重建——删库/索引损坏后调用）。返回重建统计。"""
+    files = sorted(KB_DIR().glob("*.md"))
+    if not files:
+        return "(没有源文件可重建)"
+    from llama_index.core import Document, Settings
+    from llama_index.core.ingestion import IngestionPipeline
+    from llama_index.core.node_parser import SentenceSplitter
+    from llama_index.vector_stores.chroma import ChromaVectorStore
+    import chromadb
+
+    _get_engine()  # 初始化 Settings（embed_model/llm）
+    chroma_client = chromadb.PersistentClient(path=str(CHROMA_DIR()))
+    collection = chroma_client.get_or_create_collection("kb_main")
+    old = collection.get(include=[])["ids"]
+    if old:
+        collection.delete(ids=old)  # 重建语义：清空旧索引
+    pipeline = IngestionPipeline(
+        transformations=[SentenceSplitter(chunk_size=200, chunk_overlap=20)]
+    )
+    embed_model = Settings.embed_model
+    total_nodes = 0
+    total_files = 0
+    for f in files:
+        try:
+            raw = f.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            raw = f.read_text(encoding="gbk", errors="replace")  # 历史 GBK 文件兜底
+        text = raw.strip()
+        source = f.stem.split("_")[0] or "用户资料"
+        if text.startswith("#"):
+            lines = text.split("\n", 1)
+            source = lines[0].lstrip("# ").strip() or source
+            text = lines[1].strip() if len(lines) > 1 else ""
+        if not text:
+            continue
+        nodes = pipeline.run(
+            documents=[Document(text=text, metadata={"source": source, "file_path": str(f)})]
+        )
+        if not nodes:
+            continue
+        embeddings = embed_model.get_text_embedding_batch(
+            [n.get_content(metadata_mode="none") for n in nodes]
+        )
+        for n, emb in zip(nodes, embeddings, strict=True):
+            n.embedding = emb
+        ChromaVectorStore(chroma_collection=collection).add(nodes)
+        total_nodes += len(nodes)
+        total_files += 1
+    return f"已从 {total_files} 个源文件重建索引（{total_nodes} 个切片）"
+
+
+# ===== 知识库文档治理权（2026-08-20 最小落地清单⑤：可见/可删/可撤销/可改名）=====
+
+TRASH_DIR = KB_DIR() / "trash"
+
+
+def _doc_title(raw: str) -> str:
+    """标题真相源=文件首行 # 标题（kb_reindex 同口径）"""
+    first = raw.split("\n", 1)[0].strip()
+    if first.startswith("#"):
+        return first.lstrip("# ").strip()
+    return first[:40]
+
+
+def kb_list_documents() -> list[dict]:
+    """文档列表（治理权#可见）：标题/大小/修改时间/向量切片数（chroma where file_path 精确统计）"""
+    docs = []
+    try:
+        import chromadb
+
+        chroma_client = chromadb.PersistentClient(path=str(CHROMA_DIR()))
+        collection = chroma_client.get_or_create_collection("kb_main")
+    except Exception:
+        collection = None
+    # 按修改时间倒序（最新在前，2026-08-27 排序统一；原按文件名升序=与时间无关）
+    for p in sorted(KB_DIR().glob("*.md"), key=lambda p: p.stat().st_mtime, reverse=True):
+        try:
+            raw = p.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            raw = p.read_text(encoding="gbk", errors="replace")
+        count = 0
+        if collection is not None:
+            try:
+                count = len(collection.get(where={"file_path": str(p)}, include=[])["ids"])
+            except Exception:
+                count = 0
+        docs.append(
+            {
+                "id": p.stem,
+                "title": _doc_title(raw),
+                "size": p.stat().st_size,
+                "mtime": p.stat().st_mtime,
+                "vectors": count,
+            }
+        )
+    return docs
+
+
+def kb_delete_document(doc_id: str) -> dict:
+    """删除文档（治理权#可删+可撤销）：文件移回收站 trash/（不真删）+ 同步删 chroma 该文档向量。
+    关键：向量 metadata.file_path 精确关联，where 过滤删除，防幽灵检索命中。"""
+    p = KB_DIR() / f"{doc_id}.md"
+    if not p.exists():
+        return {"ok": False, "msg": f"文档不存在：{doc_id}"}
+    TRASH_DIR.mkdir(parents=True, exist_ok=True)
+    import shutil
+
+    dest = TRASH_DIR / p.name
+    n = 0
+    try:
+        import chromadb
+
+        chroma_client = chromadb.PersistentClient(path=str(CHROMA_DIR()))
+        collection = chroma_client.get_or_create_collection("kb_main")
+        hits = collection.get(where={"file_path": str(p)}, include=[])["ids"]
+        if hits:
+            collection.delete(ids=hits)
+            n = len(hits)
+    except Exception:
+        n = -1  # chroma 删除失败——文件照移（索引可重建，源文件是权威）
+    shutil.move(str(p), str(dest))
+    return {
+        "ok": True,
+        "msg": f"已移入回收站（{p.name}）并清理 {n if n >= 0 else '?'} 个向量切片",
+        "vectors": n,
+    }
+
+
+def kb_rename_document(doc_id: str, new_title: str) -> dict:
+    """重命名（治理权#可改）：改文件首行标题 + 同步 chroma metadata.source（检索引用显示新名）"""
+    new_title = (new_title or "").strip()
+    if not new_title:
+        return {"ok": False, "msg": "新标题不能为空"}
+    p = KB_DIR() / f"{doc_id}.md"
+    if not p.exists():
+        return {"ok": False, "msg": f"文档不存在：{doc_id}"}
+    raw = p.read_text(encoding="utf-8")
+    lines = raw.split("\n")
+    if lines and lines[0].startswith("#"):
+        lines[0] = f"# {new_title}"
+    else:
+        lines.insert(0, f"# {new_title}")
+    p.write_text("\n".join(lines), encoding="utf-8")
+    try:
+        import chromadb
+
+        chroma_client = chromadb.PersistentClient(path=str(CHROMA_DIR()))
+        collection = chroma_client.get_or_create_collection("kb_main")
+        hits = collection.get(where={"file_path": str(p)}, include=[])["ids"]
+        if hits:
+            collection.update(
+                ids=hits, metadatas=[{"source": new_title, "file_path": str(p)}] * len(hits)
+            )
+    except Exception as _e:
+        print(f"[tools/kb] 静默异常已可见化: {_e}", flush=True)
+    return {"ok": True, "msg": f"已重命名：{new_title}"}

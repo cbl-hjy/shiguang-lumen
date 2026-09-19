@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24">
+  <!-- 拾光 Lumen favicon v3：深空底 + 琥珀光核 + 双虚线星轨 + 青绿卫星（与品牌标/appicon 同语义） -->
+  <rect width="24" height="24" rx="5.5" fill="#0a0c11"/>
+  <g fill="none" stroke-width="1">
+    <path d="M20.34 6.48A10 10 0 0 1 10.27 21.85" stroke="rgba(236,233,225,.25)" stroke-dasharray="2.4 3" stroke-linecap="round"/>
+    <path d="M3.66 17.52A10 10 0 0 1 13.74 2.15" stroke="rgba(236,233,225,.16)" stroke-dasharray="2.4 3" stroke-linecap="round"/>
+  </g>
+  <circle cx="12" cy="12" r="3.1" fill="#e6be78"/>
+  <circle cx="19.2" cy="4.8" r="1.9" fill="#3ec9b0"/>
+  <circle cx="4.6" cy="19.4" r="1.4" fill="rgba(230,190,120,.65)"/>
+</svg>

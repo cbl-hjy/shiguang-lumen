@@ -1,0 +1,43 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# 环境与密钥（绝不入库）
+.env
+
+# 运行时数据
+*.log
+data/
+data-experiment/
+data-test-tmp/
+
+# 前端构建
+frontend/.cache/
+frontend/dist/
+frontend/node_modules/
+
+# 运行时缓存（沙箱图表 / 产物 / 嵌入缓存 —— 2026-09-19 随模块化重构补齐）
+.cache/
+cache/
+
+# 模型与大文件（按需本地下载，不入库）
+*.gguf
+*.onnx
+*.safetensors
+
+# 隐私红线（2026-08-21）：用户记忆 / 开发过程文件 / 评测数据 / 备份——绝不入库
+/memory/
+.workbuddy/
+reports/
+docs/
+logs/
+research/
+backup-*.bundle
+backups/
+budget_test/
+GOALS.md
+PROGRESS.md
+AGENTS.md
+CODEBUDDY.md

@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <!-- 2026-08-29 应用图标：星尘精灵（9c6e 定稿）多尺寸——favicon/ICO/PWA/Apple touch -->
+    <link rel="icon" type="image/x-icon" href="./icons/favicon.ico" />
+    <link rel="icon" type="image/png" sizes="32x32" href="./icons/favicon-32.png" />
+    <link rel="icon" type="image/png" sizes="96x96" href="./icons/icon-96.png" />
+    <link rel="icon" type="image/png" sizes="192x192" href="./icons/icon-192.png" />
+    <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png" />
+    <!-- 启动画面精灵：必须显式 preload（搜索实证：加载顺序在网络层，img 标签不会自动优先——
+         不 preload 就会出现"启动动画还没看到图就进主界面"；fetchpriority=high 提到最高优先级） -->
+    <link rel="preload" as="image" href="./splash-mascot.png" fetchpriority="high" />
+    <!-- 2026-08-27 移动端：固定视口禁止页面缩放（豆包式）——放大看细节交给内容本身的 Lightbox/大图，
+         否则"放大看细节"只会把整个界面一起放大，没有意义 -->
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover"
+    />
+    <title>拾光 Lumen</title>
+  </head>
+  <body>
+    <!-- 启动加载界面（2026-08-28 CSS 动画版：mascot 呼吸浮动+粒子+光晕——零加载延迟、
+         不依赖视频；设计过的启动画面而非"放视频"，2.8s 后淡出由 main.tsx 控制） -->
+    <div id="splash">
+      <div class="sp-dust sp-d1"></div>
+      <div class="sp-dust sp-d2"></div>
+      <div class="sp-dust sp-d3"></div>
+      <div class="sp-dust sp-d4"></div>
+      <div class="sp-dust sp-d5"></div>
+      <div class="sp-dust sp-d6"></div>
+      <div class="sp-mascot">
+        <!-- fetchpriority=high + 显式尺寸（防 CLS 布局跳动）；preload 在 head 已声明 -->
+        <img
+          src="./splash-mascot.png"
+          alt="拾光星尘精灵"
+          width="320"
+          height="320"
+          fetchpriority="high"
+          decoding="async"
+        />
+      </div>
+      <div class="sp-title">拾光 Lumen</div>
+      <div class="sp-sub">正在拾起你的光…</div>
+      <div class="sp-dots"><i></i><i></i><i></i><i></i></div>
+    </div>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

@@ -1,0 +1,985 @@
+/* 拾光 Lumen · 设计 token v3（2026-08-20 重构定稿，docs/FRONTEND-DESIGN-SYSTEM.md）
+   概念：黑底=夜，teal=光——"夜色里的一盏灯"升级为"夜空中拾光"：
+   - 光点系统：一粒光 = 一个状态 / 一次拾取 / 一位星宿
+   - 光轨：主题沿时间轴排布（时光机语义，休眠只藏不删）
+   - 光色语义：青=进行 / 琥珀=需注意(非红=不焦虑) / 白=完成 / 暗=休眠
+   字体同族：字标站酷小薇（Logo 动态加载）· 正文霞鹜文楷 · 数字/代码 JetBrains Mono
+   ─────────────────────────────────────────────
+   v3 UI 重构（2026-08-26）："光与时间"深空沉浸升级——
+   ① 深空底 #0a0c11 系（更沉浸的夜）
+   ② 琥珀金=拾光时刻（品牌/仪式/闪光），teal 仍=进行中操作（发送键/焦点/成功）
+   ③ 极光紫 aurora=AI 光缝（消息左缘紫→金渐变，对话唯一主角）
+   ④ 状态分层 opacity 87/60/38（原文案 ink-muted/dim 对齐）
+   ⑤ 玻璃 2.0：--glass-blur 18px（顶栏/星图遮罩）
+   ⑥ 新动效：AI 光缝点亮 / thinking 三色流光 / glint 波纹环 / 星图 stagger 入场 / 极光漂移 */
+@import '@fontsource/jetbrains-mono/400.css';
+@import '@fontsource/jetbrains-mono/500.css';
+@import 'tailwindcss';
+
+@theme {
+  /* 夜（背景层级，v3 深空：更深的沉浸夜，非纯黑） */
+  --color-bg: #0a0c11;
+  --color-surface: #0e1118;
+  --color-elevated: #131722;
+  /* 光（文字，暖米白非纯白，台灯暖感；状态分层 87/60/38） */
+  --color-ink: #ece9e1;
+  --color-ink-strong: rgba(236, 233, 225, 0.87);
+  --color-ink-muted: rgba(236, 233, 225, 0.6);
+  --color-ink-dim: rgba(236, 233, 225, 0.38);
+  /* 语义色（低饱和，鲜艳只给关键操作/状态） */
+  --color-primary: #3ec9b0;
+  --color-primary-ink: #0b1512;
+  --color-amber: #e6be78; /* 拾光金：闪光/下一步/待审/仪式专用——"拾到"时刻 */
+  --color-aurora: #7c5cff; /* 极光紫（v3）：AI 光缝/thinking 流光 */
+  --color-success: #4cb782;
+  --color-warning: #f2994a;
+  --color-error: #eb5757;
+  --color-hairline: rgba(236, 233, 225, 0.08);
+  /* 字阶（8/9px 全删 · 消息正文最大 14px · 11px micro 封顶） */
+  --text-micro: 11px;
+  --text-sm: 12px;
+  --text-base: 13px;
+  --text-md: 14px;
+  --text-lg: 15px;
+  /* 圆角（6 输入 / 10 卡片 / 14 弹窗） */
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  /* 字体 */
+  --font-logo: 'ZCOOL XiaoWei', 'Songti SC', 'SimSun', serif;
+  /* 2026-08-28 性能优化：霞鹜文楷全量包 42MB（woff2 8.8MB×2）拖垮首屏——中文正文回系统字体栈
+     （微信/知乎同策略）；霞鹜文楷待子集化工具就位后以 <1MB 子集回归（Phase 设计） */
+  --font-sans: 'PingFang SC', 'HarmonyOS Sans SC', 'Noto Sans SC', 'Microsoft YaHei', system-ui, -apple-system, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, 'Cascadia Code', Consolas, monospace;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+/* SPA 布局锁死：body 永不滚动，滚动全部发生在内部容器（侧栏/聊天区独立滚动，互不联动） */
+html,
+body {
+  overflow: hidden;
+}
+
+body {
+  margin: 0;
+  /* v3 深空（2026-08-26 二次修正：光晕 alpha 提到 0.16-0.22——0.10-0.14 仍淡到 OpenCV 检不出紫像素，用户"背景还是旧的"实锤） */
+  background:
+    radial-gradient(110% 75% at 72% 18%, #141b29 0%, var(--color-bg) 58%, #07090e 100%),
+    radial-gradient(38% 30% at 78% 28%, rgba(62, 201, 176, 0.18), transparent 62%),
+    radial-gradient(44% 34% at 22% 20%, rgba(124, 92, 255, 0.22), transparent 62%),
+    radial-gradient(50% 38% at 55% 82%, rgba(230, 190, 120, 0.16), transparent 65%);
+  background-attachment: fixed;
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  font-weight: 400;
+  -webkit-font-smoothing: antialiased;
+  font-feature-settings: 'kern';
+}
+
+/* v3 极光漂移层（可选：给需要缓慢流动深空的容器加 .aurora-drift，零事件干扰） */
+.aurora-drift {
+  position: fixed;
+  inset: -12%;
+  pointer-events: none;
+  z-index: 0;
+  background:
+    radial-gradient(42% 32% at 24% 22%, rgba(124, 92, 255, 0.16), transparent 62%),
+    radial-gradient(38% 30% at 78% 30%, rgba(62, 201, 176, 0.12), transparent 60%),
+    radial-gradient(50% 38% at 55% 78%, rgba(230, 190, 120, 0.1), transparent 65%);
+  animation: drift 28s ease-in-out infinite alternate;
+}
+@keyframes drift {
+  from {
+    transform: translate3d(-1.5%, -1%, 0) rotate(0);
+  }
+  to {
+    transform: translate3d(1.5%, 1.2%, 0) rotate(1.2deg);
+  }
+}
+
+/* v4 材质：grain 噪声纹理（2026-08-28，Dark Glassmorphism 质感层——获奖站点标配的"不是纯色"细节）。
+   内联 SVG feTurbulence data URI，零网络请求；静止（不动画，零性能开销）；
+   opacity 0.04-0.06 即可（太强会脏，太弱没存在感）。 */
+.grain-overlay {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 1;
+  opacity: 0.05;
+  mix-blend-mode: overlay;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  background-size: 180px 180px;
+}
+
+/* v3 玻璃 2.0（顶栏/星图遮罩/悬浮面板） */
+.glass {
+  background: rgba(13, 16, 24, 0.55);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+}
+.glass-deep {
+  background: rgba(7, 9, 14, 0.5);
+  backdrop-filter: blur(22px);
+  -webkit-backdrop-filter: blur(22px);
+}
+
+/* 光束：左上角灯斜射下来的极淡光（零动画，强化光源方向感） */
+.beam {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  background: linear-gradient(
+    118deg,
+    rgba(62, 201, 176, 0.045) 0%,
+    rgba(62, 201, 176, 0.02) 22%,
+    transparent 46%
+  );
+}
+
+/* 聊天主区极淡点阵纹理（静态层，无闪烁） */
+.main-grid-bg {
+  background-image: radial-gradient(rgba(236, 233, 225, 0.03) 1px, transparent 1px);
+  background-size: 22px 22px;
+}
+
+/* 顶部 teal 极细 accent 线（光的"地平线"） */
+.top-accent-line {
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(62, 201, 176, 0.6), transparent);
+}
+
+/* 克制辉光（光=状态：重要元素带光晕，hover 微亮） */
+.glow-primary {
+  box-shadow: 0 0 18px rgba(62, 201, 176, 0.18);
+}
+.glow-primary-strong {
+  box-shadow: 0 0 26px rgba(62, 201, 176, 0.35);
+}
+.glow-amber {
+  box-shadow: 0 0 14px rgba(230, 190, 120, 0.28);
+}
+
+/* ===== 光点系统（Lumen Dots）v3：一粒光 = 一个状态/一次拾取/一位星宿 ===== */
+/* 状态光点：青=进行/琥珀=需注意/白=完成/暗=休眠（hover 显示文字补偿） */
+.lumen-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 9999px;
+  flex-shrink: 0;
+}
+.lumen-dot-active {
+  background: var(--color-primary);
+  box-shadow: 0 0 8px rgba(62, 201, 176, 0.55);
+}
+.lumen-dot-attention {
+  background: var(--color-amber);
+  box-shadow: 0 0 8px rgba(230, 190, 120, 0.5);
+}
+.lumen-dot-done {
+  background: var(--color-ink);
+  box-shadow: 0 0 6px rgba(236, 233, 225, 0.35);
+}
+.lumen-dot-dormant {
+  background: #4a525a;
+}
+
+/* 光点点亮动画（L1 状态变化：光晕扩散 400ms——"拾起"动作感） */
+@keyframes dot-ignite {
+  0% {
+    transform: scale(0.4);
+    box-shadow: 0 0 0 rgba(62, 201, 176, 0);
+  }
+  60% {
+    transform: scale(1.15);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+.lumen-dot-ignite {
+  animation: dot-ignite 0.4s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+/* 光轨（Time Trail）：主题时间轴的虚线轨迹 + 暗星（休眠不删） */
+.lumen-trail {
+  height: 1px;
+  background: repeating-linear-gradient(90deg, rgba(62, 201, 176, 0.28) 0 4px, transparent 4px 8px);
+}
+
+/* ===== 动效 token（L0-L3 分层） =====
+   2026-08-28 修复：移除 prefers-reduced-motion 禁用块——Android「移除动画」会让 WebView
+   禁用 CSS 动画（原生游戏不受影响，用户"游戏有动画但拾光没有"正是此因）；拾光动效
+   为产品核心体验（小位移/opacity，无眩晕风险），无条件生效 */
+:root {
+  --motion-fast: 150ms; /* L0 即时 */
+  --motion-point: 400ms; /* L1 点亮 */
+  --motion-flow: 300ms; /* L2 内容流 */
+  --motion-ritual: 900ms; /* L3 仪式 */
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/* 消息进场：fadeIn + 上移 4px（0.3s，reduced-motion 降级） */
+@keyframes msg-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+    filter: blur(3px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+    filter: blur(0);
+  }
+}
+
+.animate-msg-in {
+  animation: msg-in 0.3s ease-out both;
+}
+
+/* ===== v3 动效层（2026-08-26：光与时间的仪式感） ===== */
+
+/* AI 消息左缘光缝：从上往下点亮（紫→金渐变，对话唯一主角的"呼吸缝"）
+   2026-08-26 修正：宽度 2→3px、透明度 .65→.85——旧值太细太淡，用户指出"光效没了" */
+@keyframes slit-light {
+  from {
+    transform: scaleY(0);
+    opacity: 0;
+  }
+  to {
+    transform: scaleY(1);
+    opacity: 0.85;
+  }
+}
+.slit-light::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 8px;
+  bottom: 8px;
+  width: 4px;
+  border-radius: 4px;
+  background: linear-gradient(180deg, #8f6bff 0%, var(--color-aurora) 30%, var(--color-amber) 72%, rgba(230, 190, 120, 0.25));
+  transform: scaleY(0);
+  transform-origin: top;
+  box-shadow: 0 0 14px rgba(124, 92, 255, 0.5), 0 0 6px rgba(230, 190, 120, 0.35);
+  animation: slit-light 0.9s 0.2s var(--ease-out) forwards;
+}
+.slit-light:hover::before {
+  opacity: 1;
+}
+
+/* thinking 三色流光：极光紫→青→琥珀，沿弧线流动（不再是原地呼吸） */
+@keyframes orb-flow {
+  0%,
+  100% {
+    opacity: 0.25;
+    transform: translateX(0) scale(0.85);
+  }
+  50% {
+    opacity: 1;
+    transform: translateX(7px) scale(1.12);
+  }
+}
+.orb-flow {
+  display: inline-flex;
+  gap: 5px;
+}
+.orb-flow i {
+  width: 6px;
+  height: 6px;
+  border-radius: 9999px;
+  background: var(--color-aurora);
+  animation: orb-flow 1.5s ease-in-out infinite;
+}
+.orb-flow i:nth-child(2) {
+  animation-delay: 0.18s;
+  background: var(--color-primary);
+}
+.orb-flow i:nth-child(3) {
+  animation-delay: 0.36s;
+  background: var(--color-amber);
+}
+
+/* glint 仪式波纹环：星形外扩散的光环（"拾到"时刻） */
+@keyframes ring {
+  0% {
+    transform: scale(0.5);
+    opacity: 0.9;
+  }
+  70%,
+  100% {
+    transform: scale(1.5);
+    opacity: 0;
+  }
+}
+.ring-wave {
+  position: relative;
+}
+.ring-wave::after {
+  content: '';
+  position: absolute;
+  inset: -3px;
+  border-radius: 9999px;
+  border: 1px solid var(--color-amber);
+  opacity: 0;
+  animation: ring 2.2s ease-out infinite;
+}
+
+/* 星图卡片 stagger 入场：只动 opacity/filter，不碰 transform（animation 会覆盖 hover lift） */
+@keyframes card-in {
+  from {
+    opacity: 0;
+    filter: blur(7px);
+  }
+  to {
+    opacity: 1;
+    filter: none;
+  }
+}
+.animate-card-in {
+  opacity: 0;
+  animation: card-in 0.55s var(--ease-out) both;
+}
+
+/* ===== 品牌标（v3 orbit 语义：琥珀光核 + 虚线星轨 + 青绿卫星 = 光与时间） ===== */
+.brand-mark {
+  display: inline-flex;
+  align-items: center;
+}
+.logo-core {
+  transform-box: view-box;
+  transform-origin: 12px 12px;
+  animation: core-breathe 3.2s cubic-bezier(0.22, 1, 0.36, 1) infinite;
+}
+@keyframes core-breathe {
+  0%,
+  100% {
+    filter: drop-shadow(0 0 3px rgba(230, 190, 120, 0.35));
+  }
+  50% {
+    filter: drop-shadow(0 0 10px #e6be78);
+  }
+}
+.logo-orbit {
+  transform-box: view-box;
+  transform-origin: 12px 12px;
+}
+.logo-sat {
+  transform-box: view-box;
+  transform-origin: 12px 12px;
+}
+.brand-mark:hover .logo-orbit,
+.brand-mark:hover .logo-sat {
+  animation: orb-spin 9s linear infinite;
+}
+@keyframes orb-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* 工具卡完成：淡入 + 微放大 */
+@keyframes tool-done {
+  from {
+    opacity: 0.5;
+    transform: scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.animate-tool-done {
+  animation: tool-done 0.25s ease-out both;
+}
+
+/* 遮罩淡入 */
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.animate-fade-in {
+  animation: fade-in 0.15s ease-out both;
+}
+
+/* 详情 modal 弹入：淡入 + 微放大（150ms，reduced-motion 由全局降级） */
+@keyframes modal-pop {
+  from {
+    opacity: 0;
+    transform: scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.animate-modal-pop {
+  animation: modal-pop 0.15s ease-out both;
+}
+
+/* 细滚动条：hover 带 teal 光（滚动的"光"暗示） */
+*::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: rgba(236, 233, 225, 0.1);
+  border-radius: 3px;
+  transition: background 0.2s;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: rgba(62, 201, 176, 0.35);
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* 可访问性：键盘焦点可见环（teal，WCAG 2.1） */
+:focus-visible {
+  outline: 2px solid rgba(62, 201, 176, 0.65);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* 流式光点光标：teal 发光圆点（"光在打字"），替代冷条光标 */
+@keyframes cursor-blink {
+  0%,
+  45% {
+    opacity: 1;
+  }
+  50%,
+  95% {
+    opacity: 0;
+  }
+}
+
+.animate-cursor {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-left: 2px;
+  border-radius: 9999px;
+  background: var(--color-primary);
+  box-shadow: 0 0 8px rgba(62, 201, 176, 0.8);
+  vertical-align: baseline;
+  animation: cursor-blink 1.1s step-end infinite;
+}
+
+/* 消息完成光点：回答结束时光点定住（与流式光标同位置，静态微光） */
+.done-dot {
+  display: inline-block;
+  width: 5px;
+  height: 5px;
+  margin-left: 3px;
+  border-radius: 9999px;
+  background: rgba(62, 201, 176, 0.55);
+  box-shadow: 0 0 6px rgba(62, 201, 176, 0.4);
+  vertical-align: baseline;
+  animation: tool-done 0.3s ease-out both;
+}
+
+/* assistant 消息 hover：左侧 teal 光条（书签/标注感） */
+.msg-glow-strip::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 12%;
+  bottom: 12%;
+  width: 2px;
+  border-radius: 2px;
+  background: rgba(62, 201, 176, 0.5);
+  box-shadow: 0 0 8px rgba(62, 201, 176, 0.45);
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+.msg-glow-strip:hover::before {
+  opacity: 1;
+}
+
+/* 欢迎页"拾光"点亮：一次性的光晕扩散（非循环，仪式感） */
+@keyframes welcome-light {
+  0% {
+    opacity: 0.2;
+    text-shadow: 0 0 0 rgba(62, 201, 176, 0);
+  }
+  35% {
+    opacity: 1;
+    text-shadow: 0 0 24px rgba(62, 201, 176, 0.55), 0 0 60px rgba(62, 201, 176, 0.2);
+  }
+  100% {
+    opacity: 1;
+    text-shadow: 0 0 14px rgba(62, 201, 176, 0.28);
+  }
+}
+
+.animate-welcome-light {
+  animation: welcome-light 1.6s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+/* 空状态"光点+轨迹线"（统一语言：一粒光 + 虚线轨迹） */
+.empty-light {
+  position: relative;
+  width: 10px;
+  height: 10px;
+  border-radius: 9999px;
+  background: rgba(62, 201, 176, 0.55);
+  box-shadow: 0 0 10px rgba(62, 201, 176, 0.45);
+}
+.empty-trail {
+  position: relative;
+  width: 64px;
+  height: 1px;
+  background: repeating-linear-gradient(90deg, rgba(62, 201, 176, 0.3) 0 5px, transparent 5px 9px);
+}
+
+/* 字标进场：fadeIn + 字距展开（reduced-motion 降级） */
+@keyframes logo-in {
+  from {
+    opacity: 0;
+    letter-spacing: 0.35em;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    letter-spacing: 0.08em;
+    transform: translateY(0);
+  }
+}
+
+.animate-logo-in {
+  animation: logo-in 0.7s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+/* streak 火焰呼吸（2s 循环，克制） */
+@keyframes flame-breath {
+  0%,
+  100% {
+    opacity: 0.85;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.08);
+  }
+}
+
+.animate-flame {
+  animation: flame-breath 2s ease-in-out infinite;
+  display: inline-block;
+}
+
+/* 复制 toast：右下角浮现"已复制"+teal 光点 */
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-toast-in {
+  animation: toast-in 0.25s ease-out both;
+}
+
+/* Cmd+K 匹配高亮：被"光照到"的匹配文字 */
+.lumen-mark {
+  color: var(--color-primary);
+  background: rgba(62, 201, 176, 0.12);
+  border-radius: 2px;
+  padding: 0 1px;
+}
+
+/* ===== 启动加载界面（2026-08-28 CSS 动画版：mascot 呼吸浮动+粒子+光晕——
+   零加载延迟不依赖视频；2.8s 展示后由 main.tsx 淡出） ===== */
+#splash {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  background: radial-gradient(120% 90% at 50% 10%, #131a2e 0%, #0d0f13 55%, #080a0e 100%);
+  overflow: hidden;
+}
+#splash .sp-mascot {
+  position: relative;
+  width: min(46vw, 190px);
+  height: min(46vw, 190px);
+  animation: sp-float 3.6s ease-in-out infinite;
+}
+#splash .sp-mascot::before {
+  content: '';
+  position: absolute;
+  inset: -18%;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(62, 201, 176, 0.3) 0%, transparent 62%);
+  animation: sp-halo 3s ease-in-out infinite;
+}
+#splash .sp-mascot img {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 20px;
+  animation: sp-breathe 3s ease-in-out infinite;
+}
+#splash .sp-title {
+  margin-top: 14px;
+  font-size: 26px;
+  font-weight: 500;
+  letter-spacing: 12px;
+  text-indent: 12px;
+  color: rgba(236, 233, 225, 0.94);
+  opacity: 0;
+  animation: sp-rise 0.9s cubic-bezier(0.22, 1, 0.36, 1) 0.2s forwards;
+}
+#splash .sp-sub {
+  font-size: 12px;
+  letter-spacing: 4px;
+  color: rgba(139, 147, 163, 0.8);
+  opacity: 0;
+  animation: sp-rise 0.9s cubic-bezier(0.22, 1, 0.36, 1) 0.35s forwards;
+}
+#splash .sp-dots {
+  display: flex;
+  gap: 8px;
+  margin-top: 26px;
+}
+#splash .sp-dots i {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: rgba(62, 201, 176, 0.35);
+  animation: sp-dot 1.4s ease-in-out infinite;
+}
+#splash .sp-dots i:nth-child(2) { animation-delay: 0.18s; }
+#splash .sp-dots i:nth-child(3) { animation-delay: 0.36s; }
+#splash .sp-dots i:nth-child(4) { animation-delay: 0.54s; }
+#splash .sp-dust {
+  position: absolute;
+  border-radius: 50%;
+  background: rgba(62, 201, 176, 0.75);
+  animation: sp-float-up linear infinite;
+}
+#splash .sp-d1 { width: 3px; height: 3px; left: 14%; top: 30%; animation-duration: 6s; }
+#splash .sp-d2 { width: 2px; height: 2px; left: 84%; top: 22%; animation-duration: 7.5s; animation-delay: 1s; }
+#splash .sp-d3 { width: 4px; height: 4px; left: 72%; top: 72%; animation-duration: 8s; animation-delay: 0.5s; }
+#splash .sp-d4 { width: 2px; height: 2px; left: 22%; top: 80%; animation-duration: 6.5s; animation-delay: 1.8s; }
+#splash .sp-d5 { width: 2.5px; height: 2.5px; left: 48%; top: 88%; animation-duration: 7s; animation-delay: 2.5s; }
+#splash .sp-d6 { width: 3px; height: 3px; left: 90%; top: 50%; animation-duration: 8.5s; animation-delay: 0.8s; }
+@keyframes sp-float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-10px); }
+}
+@keyframes sp-breathe {
+  0%, 100% { transform: scale(0.95); filter: brightness(1); }
+  50% { transform: scale(1.04); filter: brightness(1.12); }
+}
+@keyframes sp-halo {
+  0%, 100% { opacity: 0.55; transform: scale(0.92); }
+  50% { opacity: 1; transform: scale(1.08); }
+}
+@keyframes sp-rise {
+  from { opacity: 0; transform: translateY(16px); filter: blur(4px); }
+  to { opacity: 1; transform: translateY(0); filter: blur(0); }
+}
+@keyframes sp-dot {
+  0%, 100% { transform: scale(1); background: rgba(62, 201, 176, 0.35); }
+  50% { transform: scale(1.5); background: rgba(62, 201, 176, 0.95); }
+}
+@keyframes sp-float-up {
+  0% { transform: translateY(0) scale(1); opacity: 0; }
+  12% { opacity: 0.9; }
+  50% { transform: translateY(-26px) scale(1.15); opacity: 0.55; }
+  88% { opacity: 0.9; }
+  100% { transform: translateY(-52px) scale(1); opacity: 0; }
+}
+/* ===== WebView 交互态修复（2026-08-28 用户"点击输入框两个光框"真因） =====
+   Android WebView 点击元素默认显示系统高亮框（tap-highlight 半透明灰/蓝），
+   与胶囊聚焦边框叠加=用户看到的"两个光框"。全局禁用。 */
+* {
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* ===== 输入光效三件套（2026-08-28 补齐——此前 JS 挂 class 但 CSS 缺失 = 用户"没看到光效"真因） ===== */
+
+/* 1. 胶囊聚焦光效：点击输入框 → 边框亮起 + 呼吸光晕（"点击后变光框"的正式答案，青=拾光） */
+.chat-capsule:focus-within {
+  border-color: rgba(62, 201, 176, 0.55);
+  animation: capsule-breathe 2.6s ease-in-out infinite;
+}
+@keyframes capsule-breathe {
+  0%,
+  100% {
+    box-shadow: 0 0 0 1px rgba(62, 201, 176, 0.18), 0 0 14px rgba(62, 201, 176, 0.1),
+      inset 0 0 10px rgba(62, 201, 176, 0.03);
+  }
+  50% {
+    box-shadow: 0 0 0 1px rgba(62, 201, 176, 0.32), 0 0 26px rgba(62, 201, 176, 0.2),
+      inset 0 0 16px rgba(62, 201, 176, 0.06);
+  }
+}
+
+/* 2. 按钮点击涟漪（Material 简化：active 时光晕脉冲扩散，不裁剪=光束可共存） */
+.ripple {
+  position: relative;
+}
+.ripple::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: radial-gradient(circle at center, rgba(236, 233, 225, 0.4) 0%, transparent 62%);
+  opacity: 0;
+  transform: scale(0.2);
+  pointer-events: none;
+  transition: none;
+}
+.ripple:active::after {
+  opacity: 1;
+  transform: scale(1.45);
+  transition: transform 0.4s cubic-bezier(0.22, 1, 0.36, 1), opacity 0.5s ease;
+}
+
+/* 3. 发送光束：可发送时按钮常驻微光 → 点击瞬间辉光脉冲 + 一束光向上飞升（仪式感：传光） */
+.send-beam {
+  position: relative;
+  z-index: 1;
+}
+.send-beam:not(:disabled) {
+  box-shadow: 0 0 12px rgba(62, 201, 176, 0.22);
+}
+.send-beam.beam-fire {
+  animation: beam-pulse 0.55s ease-out;
+}
+.send-beam.beam-fire::before {
+  content: '';
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 4px);
+  width: 3px;
+  height: 0;
+  transform: translateX(-50%);
+  border-radius: 999px;
+  background: linear-gradient(to top, rgba(230, 190, 120, 0.95), rgba(62, 201, 176, 0.65), transparent);
+  box-shadow: 0 0 10px rgba(230, 190, 120, 0.75), 0 0 26px rgba(62, 201, 176, 0.45);
+  animation: beam-shoot 0.55s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  pointer-events: none;
+}
+@keyframes beam-pulse {
+  0% {
+    box-shadow: 0 0 12px rgba(62, 201, 176, 0.22);
+  }
+  25% {
+    box-shadow: 0 0 22px rgba(62, 201, 176, 0.6), 0 0 44px rgba(230, 190, 120, 0.4);
+  }
+  100% {
+    box-shadow: 0 0 12px rgba(62, 201, 176, 0.22);
+  }
+}
+@keyframes beam-shoot {
+  0% {
+    height: 0;
+    opacity: 0;
+  }
+  18% {
+    opacity: 1;
+  }
+  100% {
+    height: 110px;
+    opacity: 0;
+  }
+}
+
+/* ===== 主题切换（2026-08-28 设置页）：data-theme 覆盖背景氛围——主色/文字不变，只换环境光 ===== */
+body[data-theme='deepspace'] {
+  /* 深空：纯黑极简，极光压暗——专注阅读 */
+  background:
+    radial-gradient(110% 75% at 72% 18%, #0d111a 0%, var(--color-bg) 58%, #04060a 100%),
+    radial-gradient(30% 24% at 78% 28%, rgba(62, 201, 176, 0.09), transparent 62%),
+    radial-gradient(34% 26% at 22% 20%, rgba(124, 92, 255, 0.1), transparent 62%);
+  background-attachment: fixed;
+}
+body[data-theme='deepspace'] .aurora-drift {
+  opacity: 0.35;
+}
+body[data-theme='ember'] {
+  /* 暖光：琥珀暖调，光的"家"的氛围——暖色极光 */
+  background:
+    radial-gradient(110% 75% at 72% 18%, #1d150c 0%, var(--color-bg) 58%, #0a0704 100%),
+    radial-gradient(38% 30% at 78% 28%, rgba(230, 190, 120, 0.2), transparent 62%),
+    radial-gradient(44% 34% at 22% 20%, rgba(190, 84, 40, 0.12), transparent 62%);
+  background-attachment: fixed;
+}
+body[data-theme='ember'] .aurora-drift {
+  background:
+    radial-gradient(42% 32% at 24% 22%, rgba(190, 84, 40, 0.13), transparent 62%),
+    radial-gradient(38% 30% at 78% 30%, rgba(230, 190, 120, 0.17), transparent 60%),
+    radial-gradient(50% 38% at 55% 78%, rgba(230, 190, 120, 0.15), transparent 65%);
+}
+
+/* v4 mascot（2026-08-29 定稿 9c6e）：呼吸浮动 + 光晕脉动 + 微旋转。
+   节奏参考：动态视频拆解（波动周期 ~1.2-1.5s 活泼快浮）；火焰/眨眼为图内固定层（整体动画覆盖）。
+   纪律：只动 transform/opacity（GPU 合成，零重排）；纯 CSS keyframes（合成器接管，零 JS rAF）。 */
+.mascot {
+  position: relative;
+  pointer-events: none;
+}
+.mascot-img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  /* 2026-08-29 无抠图融合（用户定稿：原图直用，不碰像素）：深空背景原图 + screen 混合——
+     深蓝夜空像素与 UI 夜空相乘趋近融合，精灵亮色保留——光效/高光 100% 无损 */
+  mix-blend-mode: screen;
+  animation: mascot-breathe 1.4s ease-in-out infinite;
+  filter: drop-shadow(0 10px 26px rgba(124, 92, 255, 0.35));
+  will-change: transform;
+}
+.mascot-glow {
+  position: absolute;
+  inset: -16%;
+  border-radius: 50%;
+  background: radial-gradient(
+    50% 50% at 50% 55%,
+    rgba(124, 92, 255, 0.26),
+    rgba(230, 190, 120, 0.1) 45%,
+    transparent 70%
+  );
+  animation: mascot-glow 1.4s ease-in-out infinite;
+  opacity: 0.7;
+}
+@keyframes mascot-breathe {
+  0%,
+  100% {
+    transform: translateY(0) rotate(-1.2deg);
+  }
+  50% {
+    transform: translateY(-5%) rotate(1.2deg);
+  }
+}
+@keyframes mascot-glow {
+  0%,
+  100% {
+    opacity: 0.45;
+    transform: scale(0.97);
+  }
+  50% {
+    opacity: 0.9;
+    transform: scale(1.04);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .mascot-img,
+  .mascot-glow {
+    animation: none;
+  }
+}
+
+/* v4 拾光时刻（2026-08-29）：AI 回复完成的琥珀金波纹——一次回复=一次拾光（仪式感）。
+   纪律：只动 transform/opacity（GPU 合成）；0.8s 一次性（非循环，克制）；reduced-motion 停用 */
+.glint-wrap {
+  position: absolute;
+  left: 50%;
+  bottom: 64px;
+  width: 0;
+  height: 0;
+  pointer-events: none;
+}
+.glint-ring {
+  position: absolute;
+  left: -28px;
+  top: -28px;
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  border: 1.5px solid rgba(230, 190, 120, 0.75);
+  box-shadow: 0 0 18px rgba(230, 190, 120, 0.35), inset 0 0 10px rgba(230, 190, 120, 0.2);
+  animation: glint-ring 0.8s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+.glint-ring-2 {
+  animation-delay: 0.12s;
+  border-color: rgba(230, 190, 120, 0.45);
+}
+.glint-dot {
+  position: absolute;
+  left: -3px;
+  top: -3px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #e6be78;
+  box-shadow: 0 0 12px rgba(230, 190, 120, 0.9);
+  animation: glint-dot 0.8s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+@keyframes glint-ring {
+  0% {
+    transform: scale(0.3);
+    opacity: 0;
+  }
+  30% {
+    opacity: 1;
+  }
+  100% {
+    transform: scale(4.2);
+    opacity: 0;
+  }
+}
+@keyframes glint-dot {
+  0% {
+    transform: scale(0.5) translateY(0);
+    opacity: 0;
+  }
+  25% {
+    opacity: 1;
+  }
+  100% {
+    transform: scale(1.4) translateY(-18px);
+    opacity: 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .glint-ring,
+  .glint-dot {
+    animation: none;
+    display: none;
+  }
+}
+
+/* 自定义背景（2026-08-29）：用户上传图铺底 + 暗化遮罩保文字可读；静止零开销 */
+.custom-bg {
+  position: fixed;
+  inset: 0;
+  z-index: -2;
+  background-size: cover;
+  background-position: center;
+  pointer-events: none;
+}
+.custom-bg::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: rgba(8, 10, 14, 0.55);
+}
